@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify, send_file
+from flask import Flask, render_template_string, request, jsonify, send_file, redirect
 import os
 import uuid
 from datetime import datetime
@@ -147,7 +147,7 @@ HTML_TEMPLATE = """
         </div>
         {% endif %}
 
-        <form method="POST">
+        <form method="GET" action="/submit">
             <div class="form-group">
                 <label for="title">📚 Lecture Title:</label>
                 <input type="text" id="title" name="title" placeholder="e.g., Introduction to Machine Learning" required>
@@ -219,11 +219,11 @@ def index():
                                  progress=progress,
                                  download_links=download_links)
 
-@app.route('/submit', methods=['POST'])
+@app.route('/submit', methods=['GET'])
 def submit_task():
-    title = request.form.get('title')
-    video_url = request.form.get('video_url')
-    description = request.form.get('description', '')
+    title = request.args.get('title')
+    video_url = request.args.get('video_url')
+    description = request.args.get('description', '')
 
     if not title or not video_url:
         error_message = "Please provide both title and video URL"
