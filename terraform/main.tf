@@ -182,6 +182,7 @@ resource "yandex_serverless_container" "api" {
   memory             = 512
   execution_timeout  = "60s"
   concurrency        = 10
+  description        = "Flask application for Lecture Notes Generator - Fixed and Ready"
 
   image {
     url = "cr.yandex/crptj2umdqses054hv4i/api:latest"
