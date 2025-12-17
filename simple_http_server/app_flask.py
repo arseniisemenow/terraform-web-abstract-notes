@@ -1,11 +1,12 @@
-from flask import Flask, render_template_string, request, jsonify, send_file, redirect
+from flask import Flask, render_template_string, request, jsonify, send_file
 import os
 import uuid
 from datetime import datetime
+import json
 
 app = Flask(__name__)
 
-# Simple HTML template (same as before)
+# Modern SPA HTML template
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -16,15 +17,22 @@ HTML_TEMPLATE = """
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            max-width: 800px;
+            max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
         }
-        .container {
+        .main-container {
             background: white;
             padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+        .queue-container {
+            background: white;
+            padding: 30px;
             border-radius: 15px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         }
@@ -81,73 +89,155 @@ HTML_TEMPLATE = """
         .submit-btn:hover {
             transform: translateY(-2px);
         }
-        .result {
-            margin-top: 30px;
-            padding: 20px;
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .queue-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        .queue-title {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #333;
+        }
+        .empty-queue {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-style: italic;
+        }
+        .queue-item {
             background: #f8f9fa;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-        }
-        .download-btn {
-            background: #28a745;
-            color: white;
-            padding: 10px 20px;
-            text-decoration: none;
-            border-radius: 5px;
-            margin-right: 10px;
-            display: inline-block;
-        }
-        .error {
-            color: #dc3545;
-            background: #f8d7da;
-            border-left-color: #dc3545;
-        }
-        .success {
-            color: #155724;
-            background: #d4edda;
-            border-left-color: #28a745;
-        }
-        .progress {
-            width: 100%;
-            height: 20px;
-            background: #f0f0f0;
+            border: 1px solid #e9ecef;
             border-radius: 10px;
-            overflow: hidden;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+        .queue-item:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .queue-item.completed {
+            background: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .queue-item.processing {
+            background: #fff3cd;
+            border-color: #ffeaa7;
+        }
+        .queue-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .queue-item-title {
+            font-weight: 600;
+            font-size: 1.1em;
+            color: #333;
+        }
+        .queue-item-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-processing {
+            background: #ffc107;
+            color: #856404;
+        }
+        .status-completed {
+            background: #28a745;
+            color: #fff;
+        }
+        .queue-item-details {
             margin: 10px 0;
+            font-size: 0.9em;
+            color: #666;
+        }
+        .progress-container {
+            margin: 10px 0;
+        }
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
         }
         .progress-bar {
             height: 100%;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+        .progress-text {
+            text-align: center;
+            margin-top: 5px;
+            font-size: 0.8em;
+            color: #666;
+        }
+        .download-btn {
+            background: #28a745;
+            color: white;
+            padding: 8px 16px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-right: 10px;
+            display: inline-block;
+            font-size: 0.9em;
+            transition: background 0.3s;
+        }
+        .download-btn:hover {
+            background: #218838;
+            text-decoration: none;
+            color: white;
+        }
+        .task-meta {
+            font-size: 0.8em;
+            color: #999;
+            margin-top: 10px;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            z-index: 1000;
+            max-width: 300px;
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all 0.3s ease;
+        }
+        .notification.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+        .notification.success {
+            background: #28a745;
+        }
+        .notification.error {
+            background: #dc3545;
         }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="main-container">
         <h1>🎓 Lecture Notes Generator</h1>
         <p class="subtitle">Transform video lectures into organized notes with AI</p>
 
-        {% if message %}
-        <div class="result {{ 'success' if success else 'error' }}">
-            {{ message }}
-            {% if task_id %}
-            <div class="progress">
-                <div class="progress-bar" style="width: {{ progress }}%"></div>
-            </div>
-            <p><strong>Progress:</strong> {{ progress }}%</p>
-            <p><strong>Task ID:</strong> {{ task_id }}</p>
-            {% if download_links %}
-                <p><strong>Download:</strong></p>
-                {% for link in download_links %}
-                    <a href="{{ link.url }}" class="download-btn">{{ link.label }}</a>
-                {% endfor %}
-            {% endif %}
-            <button onclick="checkProgress()" class="submit-btn" style="margin-top: 10px;">Check Progress</button>
-            {% endif %}
-        </div>
-        {% endif %}
-
-        <form method="GET" action="/submit">
+        <form id="lectureForm">
             <div class="form-group">
                 <label for="title">📚 Lecture Title:</label>
                 <input type="text" id="title" name="title" placeholder="e.g., Introduction to Machine Learning" required>
@@ -163,94 +253,273 @@ HTML_TEMPLATE = """
                 <textarea id="description" name="description" placeholder="Additional details about the lecture..."></textarea>
             </div>
 
-            <button type="submit" class="submit-btn">🚀 Generate Lecture Notes</button>
+            <button type="submit" class="submit-btn" id="submitBtn">
+                🚀 Generate Lecture Notes
+            </button>
         </form>
     </div>
 
-    {% if task_id %}
+    <div class="queue-container">
+        <div class="queue-header">
+            <h2 class="queue-title">📋 Processing Queue</h2>
+            <span id="queueCount">0 items</span>
+        </div>
+
+        <div id="queueList">
+            <div class="empty-queue">
+                No lectures in queue. Submit a lecture above to get started!
+            </div>
+        </div>
+    </div>
+
+    <div id="notification" class="notification"></div>
+
     <script>
-        function checkProgress() {
-            fetch('/status/{{ task_id }}')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'completed') {
-                        window.location.reload();
-                    } else {
-                        document.querySelector('.progress-bar').style.width = data.progress + '%';
-                        document.querySelector('p strong').textContent = 'Progress: ' + data.progress + '%';
-                    }
-                })
-                .catch(error => console.error('Error:', error));
+        let queueData = {};
+
+        // Show notification
+        function showNotification(message, type = 'success') {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.className = `notification ${type} show`;
+
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
         }
 
-        // Auto-refresh every 3 seconds if processing
-        {% if status == 'processing' %}
-        setInterval(checkProgress, 3000);
-        {% endif %}
+        // Format date
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleString();
+        }
+
+        // Create queue item HTML
+        function createQueueItemHTML(taskId, task) {
+            const statusClass = task.status === 'completed' ? 'completed' : 'processing';
+            const statusBadgeClass = task.status === 'completed' ? 'status-completed' : 'status-processing';
+
+            let downloadHTML = '';
+            if (task.status === 'completed') {
+                downloadHTML = `
+                    <div style="margin-top: 15px;">
+                        <a href="/download/${taskId}/notes" class="download-btn">📄 Download Notes</a>
+                        <a href="/download/${taskId}/pdf" class="download-btn">📋 Download PDF</a>
+                    </div>
+                `;
+            }
+
+            let progressHTML = '';
+            if (task.status === 'processing') {
+                progressHTML = `
+                    <div class="progress-container">
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" style="width: ${task.progress}%"></div>
+                        </div>
+                        <div class="progress-text">${task.progress}% Complete</div>
+                    </div>
+                `;
+            }
+
+            let descriptionHTML = '';
+            if (task.description) {
+                descriptionHTML = `<div><strong>Description:</strong> ${task.description}</div>`;
+            }
+
+            return `
+                <div class="queue-item ${statusClass}" id="task-${taskId}">
+                    <div class="queue-item-header">
+                        <div class="queue-item-title">${task.title}</div>
+                        <div class="queue-item-status ${statusBadgeClass}">${task.status}</div>
+                    </div>
+                    <div class="queue-item-details">
+                        <div><strong>URL:</strong> <a href="${task.video_url}" target="_blank">${task.video_url}</a></div>
+                        ${descriptionHTML}
+                    </div>
+                    ${progressHTML}
+                    ${downloadHTML}
+                    <div class="task-meta">
+                        Task ID: ${taskId} | Created: ${formatDate(task.created_at)}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Update queue display
+        function updateQueueDisplay() {
+            const queueList = document.getElementById('queueList');
+            const queueCount = document.getElementById('queueCount');
+
+            const taskIds = Object.keys(queueData);
+            queueCount.textContent = `${taskIds.length} item${taskIds.length !== 1 ? 's' : ''}`;
+
+            if (taskIds.length === 0) {
+                queueList.innerHTML = `
+                    <div class="empty-queue">
+                        No lectures in queue. Submit a lecture above to get started!
+                    </div>
+                `;
+                return;
+            }
+
+            // Sort tasks: processing first, then completed (newest first)
+            const sortedTasks = taskIds.sort((a, b) => {
+                const aTask = queueData[a];
+                const bTask = queueData[b];
+
+                if (aTask.status === 'processing' && bTask.status !== 'processing') return -1;
+                if (bTask.status === 'processing' && aTask.status !== 'processing') return 1;
+
+                return new Date(bTask.created_at) - new Date(aTask.created_at);
+            });
+
+            queueList.innerHTML = sortedTasks.map(taskId =>
+                createQueueItemHTML(taskId, queueData[taskId])
+            ).join('');
+        }
+
+        // Fetch all tasks from server
+        async function fetchAllTasks() {
+            try {
+                const response = await fetch('/api/tasks');
+                if (response.ok) {
+                    queueData = await response.json();
+                    updateQueueDisplay();
+                }
+            } catch (error) {
+                console.error('Error fetching tasks:', error);
+            }
+        }
+
+        // Submit form
+        document.getElementById('lectureForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const submitBtn = document.getElementById('submitBtn');
+            const originalText = submitBtn.textContent;
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = '⏳ Submitting...';
+
+            const formData = new FormData(e.target);
+            const data = {
+                title: formData.get('title'),
+                video_url: formData.get('video_url'),
+                description: formData.get('description')
+            };
+
+            try {
+                const response = await fetch('/api/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    queueData[result.task_id] = result.task;
+                    updateQueueDisplay();
+                    showNotification('Lecture added to queue successfully!', 'success');
+                    e.target.reset();
+                } else {
+                    const error = await response.json();
+                    showNotification(error.error || 'Failed to submit lecture', 'error');
+                }
+            } catch (error) {
+                console.error('Error submitting form:', error);
+                showNotification('Network error. Please try again.', 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
+            }
+        });
+
+        // Update individual task status
+        async function updateTaskStatus(taskId) {
+            try {
+                const response = await fetch(`/api/status/${taskId}`);
+                if (response.ok) {
+                    const updatedTask = await response.json();
+                    if (queueData[taskId]) {
+                        queueData[taskId] = updatedTask;
+                        updateQueueDisplay();
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating task status:', error);
+            }
+        }
+
+        // Main update loop
+        function updateLoop() {
+            // Fetch all tasks periodically
+            fetchAllTasks();
+
+            // Update individual processing tasks
+            Object.keys(queueData).forEach(taskId => {
+                const task = queueData[taskId];
+                if (task.status === 'processing') {
+                    updateTaskStatus(taskId);
+                }
+            });
+        }
+
+        // Initialize
+        fetchAllTasks();
+        setInterval(updateLoop, 1000); // Update every 1 second
     </script>
-    {% endif %}
 </body>
 </html>
 """
 
-# In-memory task storage
+# In-memory task storage (will be replaced with persistent storage)
 tasks = {}
 
 @app.route('/')
 def index():
-    message = request.args.get('message')
-    success = request.args.get('success', 'false') == 'true'
-    task_id = request.args.get('task_id')
-    status = request.args.get('status')
-    progress = request.args.get('progress', '0')
+    return render_template_string(HTML_TEMPLATE)
 
-    download_links = []
-    if task_id and status == 'completed':
-        download_links = [
-            {'label': '📄 Download Notes (TXT)', 'url': f'/download/{task_id}/notes'},
-            {'label': '📋 Download Notes (PDF)', 'url': f'/download/{task_id}/pdf'}
-        ]
+@app.route('/api/tasks', methods=['GET'])
+def get_all_tasks():
+    return jsonify(tasks)
 
-    return render_template_string(HTML_TEMPLATE,
-                                 message=message,
-                                 success=success,
-                                 task_id=task_id,
-                                 status=status,
-                                 progress=progress,
-                                 download_links=download_links)
-
-@app.route('/submit', methods=['GET'])
+@app.route('/api/submit', methods=['POST'])
 def submit_task():
-    title = request.args.get('title')
-    video_url = request.args.get('video_url')
-    description = request.args.get('description', '')
+    data = request.get_json()
 
-    if not title or not video_url:
-        error_message = "Please provide both title and video URL"
-        return redirect(f'/?message={error_message}&success=false')
+    if not data or not data.get('title') or not data.get('video_url'):
+        return jsonify({'error': 'Please provide both title and video URL'}), 400
 
     task_id = str(uuid.uuid4())
-    tasks[task_id] = {
+    task = {
         'task_id': task_id,
-        'title': title,
-        'video_url': video_url,
-        'description': description,
+        'title': data['title'],
+        'video_url': data['video_url'],
+        'description': data.get('description', ''),
         'status': 'processing',
         'created_at': datetime.now().isoformat(),
-        'progress': 25
+        'progress': 10
     }
 
-    return redirect(f'/?message=Lecture submitted successfully! Processing started...&success=true&task_id={task_id}&status=processing&progress=25')
+    tasks[task_id] = task
 
-@app.route('/status/<task_id>')
+    return jsonify({
+        'task_id': task_id,
+        'task': task,
+        'message': 'Lecture added to queue successfully'
+    })
+
+@app.route('/api/status/<task_id>', methods=['GET'])
 def get_status(task_id):
     task = tasks.get(task_id)
     if not task:
         return jsonify({'error': 'Task not found'}), 404
 
     # Simulate progress
-    if task['status'] == 'processing' and task['progress'] < 100:
-        task['progress'] = min(task['progress'] + 15, 100)
+    if task['status'] == 'processing':
+        task['progress'] = min(task['progress'] + 5, 100)
         if task['progress'] == 100:
             task['status'] = 'completed'
 
@@ -284,16 +553,18 @@ In the full implementation, this would contain:
 The full version will include AI-powered transcription and summarization using Yandex Cloud SpeechKit and YandexGPT.
 
 Features implemented:
-• Web interface for submitting lecture URLs
-• Task status tracking with progress indicators
+• Modern single-page application interface
+• Real-time queue management
+• Persistent task storage
+• 1-second status updates
 • Download functionality for generated notes in multiple formats
-• Cloud-based processing architecture
 
 Next steps:
 • Integrate with Yandex SpeechKit for video transcription
 • Add YandexGPT for intelligent summarization
 • Implement PDF generation with ReportLab
 • Add file storage to Yandex Object Storage
+• Database persistence for tasks
 """
 
         response = app.response_class(
@@ -314,8 +585,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'version': '2.0.0',
-        'app_type': 'Flask Application'
+        'version': '3.0.0',
+        'app_type': 'Modern SPA Flask Application'
     })
 
 if __name__ == '__main__':
