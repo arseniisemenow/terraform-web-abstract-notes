@@ -1,0 +1,4 @@
+requests>=2.25.0
+boto3>=1.26.0
+botocore>=1.26.0
+yandexcloud>=0.270.0

@@ -1,12 +1,3 @@
-terraform {
-  required_providers {
-    yandex = {
-      source  = "yandex-cloud/yandex"
-      version = "~> 0.95"
-    }
-  }
-}
-
 provider "yandex" {
   token = var.yc_token
   cloud_id = var.cloud_id
@@ -151,59 +142,6 @@ resource "yandex_container_registry" "main" {
   folder_id = var.folder_id
 }
 
-
-# Serverless Container - Worker
-resource "yandex_serverless_container" "worker" {
-  name               = local.worker_name
-  folder_id          = var.folder_id
-  service_account_id = yandex_iam_service_account.main.id
-  memory             = 2048
-  execution_timeout  = "3600s"
-  concurrency        = 1
-
-  image {
-    url = "cr.yandex/mirror/ubuntu:20.04"
-  }
-
-  
-  depends_on = [
-    yandex_ydb_database_serverless.main,
-    yandex_message_queue.main,
-    yandex_storage_bucket.main,
-    yandex_container_registry.main
-  ]
-}
-
-# Serverless Container - Web API
-resource "yandex_serverless_container" "api" {
-  name               = local.api_name
-  folder_id          = var.folder_id
-  service_account_id = yandex_iam_service_account.main.id
-  memory             = 512
-  execution_timeout  = "60s"
-  concurrency        = 10
-  description        = "Flask application for Lecture Notes Generator - Modern SPA v3"
-
-  image {
-    url = "cr.yandex/crptj2umdqses054hv4i/api:modern-spa"
-  }
-
-  
-  depends_on = [
-    yandex_ydb_database_serverless.main,
-    yandex_message_queue.main,
-    yandex_storage_bucket.main,
-    yandex_container_registry.main
-  ]
-}
-
-# API Gateway - temporarily commented out due to spec issues
-# resource "yandex_api_gateway" "main" {
-#   name        = "${var.prefix}-gateway"
-#   description = "Lecture Notes Generator API Gateway"
-#   folder_id   = var.folder_id
-# }
-
 # Lockbox Secret (optional - for better security)
 resource "yandex_lockbox_secret" "main" {
   folder_id = var.folder_id
@@ -211,11 +149,6 @@ resource "yandex_lockbox_secret" "main" {
 }
 
 # Outputs
-# output "api_gateway_url" {
-#   value = "https://${yandex_api_gateway.main.id}.apigw.yandexcloud.net"
-#   description = "URL of the API Gateway"
-# }
-
 output "storage_bucket_name" {
   value = local.bucket_name
   description = "Name of the Object Storage bucket"
@@ -235,16 +168,6 @@ output "service_account_id" {
 output "container_registry_id" {
   value = yandex_container_registry.main.id
   description = "Container Registry ID"
-}
-
-output "api_container_url" {
-  value = yandex_serverless_container.api.url
-  description = "API Container URL"
-}
-
-output "worker_container_url" {
-  value = yandex_serverless_container.worker.url
-  description = "Worker Container URL"
 }
 
 output "message_queue_url" {

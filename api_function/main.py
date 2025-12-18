@@ -1,9 +1,10 @@
-from flask import Flask, render_template_string, request, jsonify, send_file
 import os
-import uuid
-from datetime import datetime
 import json
+import uuid
+import boto3
+from datetime import datetime
 import logging
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -11,9 +12,107 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Modern SPA HTML template
-HTML_TEMPLATE = """
-<!DOCTYPE html>
+# Initialize S3 client
+S3_ENDPOINT = os.getenv('S3_ENDPOINT', 'https://storage.yandexcloud.net')
+BUCKET_NAME = os.getenv('BUCKET_NAME', 'lecture-notes-storage')
+SA_KEY_ID = os.getenv('SA_KEY_ID')
+SA_SECRET = os.getenv('SA_SECRET')
+QUEUE_URL = os.getenv('QUEUE_URL')
+
+s3_client = boto3.client(
+    's3',
+    endpoint_url=S3_ENDPOINT,
+    aws_access_key_id=SA_KEY_ID,
+    aws_secret_access_key=SA_SECRET,
+    region_name='ru-central1'
+)
+
+# Initialize SQS client
+sqs_client = boto3.client(
+    'sqs',
+    endpoint_url='https://message-queue.api.cloud.yandex.net',
+    aws_access_key_id=SA_KEY_ID,
+    aws_secret_access_key=SA_SECRET,
+    region_name='ru-central1'
+)
+
+def get_tasks_from_storage():
+    """Get all tasks from S3 storage"""
+    try:
+        response = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix='tasks/')
+        tasks = {}
+
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                if obj['Key'].endswith('.json'):
+                    try:
+                        obj_response = s3_client.get_object(Bucket=BUCKET_NAME, Key=obj['Key'])
+                        task_data = json.loads(obj_response['Body'].read().decode('utf-8'))
+                        task_id = obj['Key'].replace('tasks/', '').replace('.json', '')
+                        tasks[task_id] = task_data
+                    except Exception as e:
+                        logger.error(f"Error reading task {obj['Key']}: {e}")
+
+        return tasks
+    except Exception as e:
+        logger.error(f"Error fetching tasks: {e}")
+        return {}
+
+def save_task_to_storage(task_id, task_data):
+    """Save task to S3 storage"""
+    try:
+        s3_client.put_object(
+            Bucket=BUCKET_NAME,
+            Key=f'tasks/{task_id}.json',
+            Body=json.dumps(task_data),
+            ContentType='application/json'
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error saving task {task_id}: {e}")
+        return False
+
+def handler(event, context):
+    """Main handler for Yandex Cloud Functions"""
+    if 'httpMethod' in event:
+        # API Gateway request
+        return handle_api_gateway_request(event)
+    else:
+        # Direct invocation or other trigger
+        return handle_direct_request(event)
+
+def handle_api_gateway_request(event):
+    """Handle API Gateway requests"""
+    path = event.get('path', '/')
+    method = event.get('httpMethod', 'GET')
+
+    try:
+        if method == 'GET' and path == '/':
+            return handle_index()
+        elif method == 'GET' and path == '/api/tasks':
+            return handle_get_all_tasks()
+        elif method == 'POST' and path == '/api/submit':
+            return handle_submit_task(event)
+        elif method == 'GET' and path.startswith('/api/status/'):
+            task_id = path.split('/')[-1]
+            return handle_get_status(task_id)
+        else:
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'error': 'Not found'})
+            }
+    except Exception as e:
+        logger.error(f"Error handling request: {e}")
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
+
+def handle_index():
+    """Serve the frontend HTML"""
+    html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -168,6 +267,28 @@ HTML_TEMPLATE = """
             font-size: 0.9em;
             color: #666;
         }
+        .progress-container {
+            margin: 10px 0;
+        }
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+        .progress-text {
+            text-align: center;
+            margin-top: 5px;
+            font-size: 0.8em;
+            color: #666;
+        }
         .transcription-container {
             margin-top: 15px;
             padding: 15px;
@@ -215,28 +336,6 @@ HTML_TEMPLATE = """
             text-decoration: none;
             color: white;
         }
-        .progress-container {
-            margin: 10px 0;
-        }
-        .progress-bar-container {
-            width: 100%;
-            height: 8px;
-            background: #e9ecef;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        .progress-bar {
-            height: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            transition: width 0.3s ease;
-            border-radius: 4px;
-        }
-        .progress-text {
-            text-align: center;
-            margin-top: 5px;
-            font-size: 0.8em;
-            color: #666;
-        }
         .download-btn {
             background: #28a745;
             color: white;
@@ -257,30 +356,6 @@ HTML_TEMPLATE = """
             font-size: 0.8em;
             color: #999;
             margin-top: 10px;
-        }
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 15px 20px;
-            border-radius: 8px;
-            color: white;
-            font-weight: 600;
-            z-index: 1000;
-            max-width: 300px;
-            opacity: 0;
-            transform: translateX(100%);
-            transition: all 0.3s ease;
-        }
-        .notification.show {
-            opacity: 1;
-            transform: translateX(0);
-        }
-        .notification.success {
-            background: #28a745;
-        }
-        .notification.error {
-            background: #dc3545;
         }
     </style>
 </head>
@@ -324,20 +399,12 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <div id="notification" class="notification"></div>
-
     <script>
         let queueData = {};
 
         // Show notification
         function showNotification(message, type = 'success') {
-            const notification = document.getElementById('notification');
-            notification.textContent = message;
-            notification.className = `notification ${type} show`;
-
-            setTimeout(() => {
-                notification.classList.remove('show');
-            }, 3000);
+            alert(message);
         }
 
         // Format date
@@ -356,7 +423,6 @@ HTML_TEMPLATE = """
                 downloadHTML = `
                     <div style="margin-top: 15px;">
                         <a href="/download/${taskId}/notes" class="download-btn">📄 Download Notes</a>
-                        <a href="/download/${taskId}/pdf" class="download-btn">📋 Download PDF</a>
                     </div>
                 `;
             }
@@ -388,15 +454,9 @@ HTML_TEMPLATE = """
                     <div class="transcription-container">
                         <div class="transcription-title">
                             🎙️ SpeechKit Transcription
-                            <a href="#" onclick="toggleFullTranscription('${taskId}'); return false;" class="view-transcription-btn">
-                                View Full
-                            </a>
                         </div>
-                        <div class="transcription-text" id="transcription-preview-${taskId}">
+                        <div class="transcription-text">
                             ${shortTranscription}
-                        </div>
-                        <div class="transcription-text" id="transcription-full-${taskId}" style="display: none;">
-                            ${task.transcription}
                         </div>
                         ${task.video_duration ? `<div class="transcription-meta">Duration: ${Math.round(task.video_duration)}s | Characters: ${task.transcription.length}</div>` : ''}
                     </div>
@@ -479,11 +539,10 @@ HTML_TEMPLATE = """
             submitBtn.disabled = true;
             submitBtn.textContent = '⏳ Submitting...';
 
-            const formData = new FormData(e.target);
             const data = {
-                title: formData.get('title'),
-                video_url: formData.get('video_url'),
-                description: formData.get('description')
+                title: document.getElementById('title').value,
+                video_url: document.getElementById('video_url').value,
+                description: document.getElementById('description').value
             };
 
             try {
@@ -544,218 +603,130 @@ HTML_TEMPLATE = """
             });
         }
 
-        // Toggle full transcription view
-        function toggleFullTranscription(taskId) {
-            const preview = document.getElementById(`transcription-preview-${taskId}`);
-            const full = document.getElementById(`transcription-full-${taskId}`);
-            const button = event.target;
-
-            if (preview.style.display === 'none') {
-                preview.style.display = 'block';
-                full.style.display = 'none';
-                button.textContent = 'View Full';
-            } else {
-                preview.style.display = 'none';
-                full.style.display = 'block';
-                button.textContent = 'View Less';
-            }
-        }
-
         // Initialize
         fetchAllTasks();
-        setInterval(updateLoop, 1000); // Update every 1 second
+        setInterval(updateLoop, 3000); // Update every 3 seconds
     </script>
 </body>
-</html>
-"""
+</html>"""
 
-# Import Yandex Cloud SDK for persistent storage and queue
-import boto3
-from botocore.exceptions import ClientError
-
-# Initialize S3 client for persistent task storage
-S3_ENDPOINT = os.getenv('S3_ENDPOINT', 'https://storage.yandexcloud.net')
-BUCKET_NAME = os.getenv('BUCKET_NAME', 'lecture-notes-storage')
-SA_KEY_ID = os.getenv('SA_KEY_ID')
-SA_SECRET = os.getenv('SA_SECRET')
-QUEUE_URL = os.getenv('QUEUE_URL')
-
-s3_client = boto3.client(
-    's3',
-    endpoint_url=S3_ENDPOINT,
-    aws_access_key_id=SA_KEY_ID,
-    aws_secret_access_key=SA_SECRET
-)
-
-# Initialize SQS client for message queue
-sqs_client = boto3.client(
-    'sqs',
-    endpoint_url='https://message-queue.api.cloud.yandex.net',
-    aws_access_key_id=SA_KEY_ID,
-    aws_secret_access_key=SA_SECRET
-)
-
-def get_tasks_from_storage():
-    """Get all tasks from S3 storage"""
-    try:
-        response = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix='tasks/')
-        tasks = {}
-
-        if 'Contents' in response:
-            for obj in response['Contents']:
-                if obj['Key'].endswith('.json'):
-                    try:
-                        obj_response = s3_client.get_object(Bucket=BUCKET_NAME, Key=obj['Key'])
-                        task_data = json.loads(obj_response['Body'].read().decode('utf-8'))
-                        task_id = obj['Key'].replace('tasks/', '').replace('.json', '')
-                        tasks[task_id] = task_data
-                    except Exception as e:
-                        print(f"Error reading task {obj['Key']}: {e}")
-
-        return tasks
-    except Exception as e:
-        print(f"Error fetching tasks: {e}")
-        return {}
-
-def save_task_to_storage(task_id, task_data):
-    """Save task to S3 storage"""
-    try:
-        s3_client.put_object(
-            Bucket=BUCKET_NAME,
-            Key=f'tasks/{task_id}.json',
-            Body=json.dumps(task_data),
-            ContentType='application/json'
-        )
-        return True
-    except Exception as e:
-        print(f"Error saving task {task_id}: {e}")
-        return False
-
-  
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
-
-@app.route('/api/tasks', methods=['GET'])
-def get_all_tasks():
-    return jsonify(get_tasks_from_storage())
-
-@app.route('/api/submit', methods=['POST'])
-def submit_task():
-    data = request.get_json()
-
-    if not data or not data.get('title') or not data.get('video_url'):
-        return jsonify({'error': 'Please provide both title and video URL'}), 400
-
-    task_id = str(uuid.uuid4())
-    task = {
-        'task_id': task_id,
-        'title': data['title'],
-        'video_url': data['video_url'],
-        'description': data.get('description', ''),
-        'status': 'processing',
-        'created_at': datetime.now().isoformat(),
-        'progress': 10
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'text/html'},
+        'body': html_content
     }
 
-    # Save to persistent storage
-    if save_task_to_storage(task_id, task):
-        # Add task to queue for worker processing
-        try:
-            sqs_client.send_message(
-                QueueUrl=QUEUE_URL,
-                MessageBody=json.dumps(task)
-            )
-            logger.info(f"Task {task_id} added to queue")
-
-            return jsonify({
-                'task_id': task_id,
-                'task': task,
-                'message': 'Lecture added to queue successfully'
-            })
-        except Exception as e:
-            logger.error(f"Failed to add task to queue: {e}")
-            return jsonify({'error': 'Task saved but failed to queue for processing'}), 500
-    else:
-        return jsonify({'error': 'Failed to save task to storage'}), 500
-
-@app.route('/api/status/<task_id>', methods=['GET'])
-def get_status(task_id):
-    # Get task from persistent storage
+def handle_get_all_tasks():
+    """Handle GET /api/tasks"""
     tasks = get_tasks_from_storage()
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': 'Task not found'}), 404
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps(tasks)
+    }
 
-    # Simply return current task status - worker will update it
-    return jsonify(task)
+def handle_submit_task(event):
+    """Handle POST /api/submit"""
+    try:
+        body = json.loads(event.get('body', '{}'))
 
-@app.route('/download/<task_id>/<file_type>')
-def download_file(task_id, file_type):
-    # Get task from persistent storage
-    tasks = get_tasks_from_storage()
-    task = tasks.get(task_id)
-    if not task or task['status'] != 'completed':
-        return jsonify({'error': 'File not available'}), 404
+        title = body.get('title')
+        video_url = body.get('video_url')
 
-    if file_type == 'notes':
-        transcription_section = ""
-        if task.get('transcription'):
-            transcription_section = f"""
+        if not title or not video_url:
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'error': 'Please provide both title and video URL'})
+            }
 
-🎙️ SpeechKit Transcription:
-{task['transcription']}
+        task_id = str(uuid.uuid4())
+        task = {
+            'task_id': task_id,
+            'title': title,
+            'video_url': video_url,
+            'description': body.get('description', ''),
+            'status': 'processing',
+            'created_at': datetime.now().isoformat(),
+            'progress': 10
+        }
 
----
-Transcription processed on: {task.get('processed_at', 'N/A')}
-Video duration: {task.get('video_duration', 'N/A')} seconds
-Total characters: {len(task['transcription'])}
-"""
+        # Save to persistent storage
+        if save_task_to_storage(task_id, task):
+            # Add task to queue for worker processing
+            try:
+                sqs_client.send_message(
+                    QueueUrl=QUEUE_URL,
+                    MessageBody=json.dumps(task)
+                )
+                logger.info(f"Task {task_id} added to queue")
 
-        notes_content = f"""Lecture Notes: {task['title']}
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'task_id': task_id,
+                        'task': task,
+                        'message': 'Lecture added to queue successfully'
+                    })
+                }
+            except Exception as e:
+                logger.error(f"Failed to add task to queue: {e}")
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({'error': 'Task saved but failed to queue for processing'})
+                }
+        else:
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'error': 'Failed to save task to storage'})
+            }
+    except Exception as e:
+        logger.error(f"Error in handle_submit_task: {e}")
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
 
-Generated on: {task['created_at']}
+def handle_get_status(task_id):
+    """Handle GET /api/status/{task_id}"""
+    try:
+        # Get task from persistent storage
+        tasks = get_tasks_from_storage()
+        task = tasks.get(task_id)
 
-Video URL: {task['video_url']}
+        if not task:
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'error': 'Task not found'})
+            }
 
-Description: {task['description']}
+        # Simply return current task status - worker will update it
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps(task)
+        }
+    except Exception as e:
+        logger.error(f"Error in handle_get_status: {e}")
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
 
-📝 Summary:
-Lecture notes generated from the video "{task['title']}" using Yandex Cloud SpeechKit for automatic transcription.
-{transcription_section}
-🎓 Features implemented:
-• Modern single-page application interface
-• Real-time queue management
-• SpeechKit audio transcription and processing
-• 1-second status updates
-• Download functionality for generated notes in multiple formats
-
-This demonstrates the full functionality of the Lecture Notes Generator with actual SpeechKit integration.
-The transcription above was automatically generated from the video content using Yandex Cloud's SpeechKit API.
-"""
-
-        response = app.response_class(
-            response=notes_content,
-            mimetype='text/plain',
-            headers={"Content-Disposition": f"attachment; filename=notes_{task_id}.txt"}
-        )
-        return response
-
-    elif file_type == 'pdf':
-        # For now, redirect to text version
-        return redirect(f'/download/{task_id}/notes')
-
-    return jsonify({'error': 'Invalid file type'}), 400
-
-@app.route('/health')
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'version': '3.0.0',
-        'app_type': 'Modern SPA Flask Application'
-    })
+def handle_direct_request(event):
+    """Handle direct function invocation"""
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({'message': 'Function is working'})
+    }
 
 if __name__ == '__main__':
-    # Production deployment for Yandex Cloud
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    # For local testing
+    app.run(host='0.0.0.0', port=8080, debug=True)
