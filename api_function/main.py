@@ -2,9 +2,11 @@ import os
 import json
 import uuid
 import boto3
+import requests
 from datetime import datetime
 import logging
 from flask import Flask, request, jsonify
+import re
 
 app = Flask(__name__)
 
@@ -95,6 +97,95 @@ def handle_api_gateway_request(event):
             return handle_get_all_tasks()
         elif method == 'POST' and path == '/api/submit':
             return handle_submit_task(event)
+        elif method == 'DELETE' and path.startswith('/api/tasks/'):
+            # Extract task_id from path parameters
+            task_id = path.split('/')[-1]
+            logger.info("Delete request for task_id: " + task_id + " (from path: " + path + ")")
+
+            # Check if we got the literal "{task_id}" string (broken path parameter extraction)
+            if task_id == '{task_id}':
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'Yandex API Gateway path parameter extraction issue',
+                        'workaround': 'Use query parameter: /api/tasks/delete?task_id=<task_id>',
+                        'available_tasks': list(get_tasks_from_storage().keys())[:5]
+                    })
+                }
+
+            return handle_delete_task(task_id)
+        elif method == 'POST' and path == '/api/tasks/delete':
+            # Query parameter workaround for delete functionality
+            body = {}
+            if event.get('body'):
+                body = json.loads(event.get('body', '{}'))
+
+            # Try to get task_id from JSON body first, then query params
+            task_id = body.get('task_id') or event.get('queryStringParameters', {}).get('task_id', '')
+            logger.info("Delete request via POST for task_id: " + task_id)
+
+            if not task_id:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'task_id is required in request body or query parameter',
+                        'example': 'POST /api/tasks/delete with {"task_id": "<task-id>"} or /api/tasks/delete?task_id=<task-id>'
+                    })
+                }
+
+            return handle_delete_task(task_id)
+        elif method == 'GET' and path == '/api/transcription':
+            # Query parameter for transcription download
+            query_params = event.get('queryStringParameters') or {}
+            task_id = query_params.get('task_id', '')
+            logger.info("Transcription download request for task_id: " + task_id)
+
+            if not task_id:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'task_id query parameter is required',
+                        'example': '/api/transcription?task_id=<task-id>'
+                    })
+                }
+
+            return handle_download_transcription(task_id)
+        elif method == 'GET' and path.startswith('/download/') and path.endswith('/transcription'):
+            # Path parameter approach for transcription download
+            task_id = path.split('/')[2]  # Extract from /download/{task_id}/transcription
+            logger.info("Transcription download request for task_id: " + task_id + " (from path: " + path + ")")
+
+            if task_id == '{task_id}':
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'Yandex API Gateway path parameter extraction issue',
+                        'workaround': 'Use query parameter: /api/transcription?task_id=<task_id>'
+                    })
+                }
+
+            return handle_download_transcription(task_id)
+        elif method == 'GET' and path == '/api/pdf':
+            # PDF download endpoint
+            query_params = event.get('queryStringParameters') or {}
+            task_id = query_params.get('task_id', '')
+            logger.info("PDF download request for task_id: " + task_id)
+
+            if not task_id:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'task_id query parameter is required',
+                        'example': '/api/pdf?task_id=<task-id>'
+                    })
+                }
+
+            return handle_download_pdf(task_id)
         elif method == 'GET' and path == '/api/status':
             # Query parameter workaround for broken path parameter extraction
             query_params = event.get('queryStringParameters') or {}
@@ -390,6 +481,23 @@ def handle_index():
             text-decoration: none;
             color: white;
         }
+        .delete-btn {
+            background: #dc3545;
+            color: white;
+            padding: 8px 16px;
+            text-decoration: none;
+            border-radius: 5px;
+            display: inline-block;
+            font-size: 0.9em;
+            border: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .delete-btn:hover {
+            background: #c82333;
+            text-decoration: none;
+            color: white;
+        }
         .task-meta {
             font-size: 0.8em;
             color: #999;
@@ -461,6 +569,14 @@ def handle_index():
                 downloadHTML = `
                     <div style="margin-top: 15px;">
                         <a href="/download/${taskId}/notes" class="download-btn">📄 Download Notes</a>
+                        <button onclick="deleteTask('${taskId}')" class="delete-btn" style="margin-left: 10px;">🗑️ Delete</button>
+                    </div>
+                `;
+            } else {
+                // Also show delete button for processing tasks
+                downloadHTML = `
+                    <div style="margin-top: 15px;">
+                        <button onclick="deleteTask('${taskId}')" class="delete-btn">🗑️ Delete</button>
                     </div>
                 `;
             }
@@ -497,6 +613,10 @@ def handle_index():
                             ${shortTranscription}
                         </div>
                         ${task.video_duration ? `<div class="transcription-meta">Duration: ${Math.round(task.video_duration)}s | Characters: ${task.transcription.length}</div>` : ''}
+                        <div style="margin-top: 10px;">
+                            <a href="/api/transcription?task_id=${taskId}" class="download-btn" download>📄 Download Transcription</a>
+                            ${task.pdf_url ? `<a href="${task.pdf_url}" class="download-btn" download style="background: linear-gradient(135deg, #e74c3c, #c0392b);">📋 Download PDF Notes</a>` : ''}
+                        </div>
                     </div>
                 `;
             }
@@ -611,6 +731,36 @@ def handle_index():
             }
         });
 
+        // Delete task
+        async function deleteTask(taskId) {
+            if (!confirm('Are you sure you want to delete this task? This action cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/tasks/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ task_id: taskId })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    delete queueData[taskId];
+                    updateQueueDisplay();
+                    showNotification('Task deleted successfully!', 'success');
+                } else {
+                    const error = await response.json();
+                    showNotification(error.error || 'Failed to delete task', 'error');
+                }
+            } catch (error) {
+                console.error('Error deleting task:', error);
+                showNotification('Network error. Please try again.', 'error');
+            }
+        }
+
         // Update individual task status
         async function updateTaskStatus(taskId) {
             try {
@@ -663,6 +813,102 @@ def handle_get_all_tasks():
         'body': json.dumps(tasks)
     }
 
+def validate_yandex_disk_link(video_url):
+    """Validate Yandex Disk public link and get file metadata"""
+    try:
+        # Check if this is a Yandex Disk public link
+        yandex_disk_patterns = [
+            r'https://disk\.yandex\.[a-z]+/d/',
+            r'https://yadi\.sk/d/',
+            r'https://disk\.yandex\.[a-z]+/i/',
+        ]
+
+        is_yandex_disk = any(re.match(pattern, video_url) for pattern in yandex_disk_patterns)
+
+        if not is_yandex_disk:
+            # Not a Yandex Disk link, assume it's valid
+            return {
+                'is_valid': True,
+                'is_yandex_disk': False,
+                'message': 'Not a Yandex Disk link'
+            }
+
+        # Extract public key from Yandex Disk URL
+        # Handle different URL formats
+        if '/d/' in video_url:
+            public_key = video_url.split('/d/')[-1].split('?')[0]
+        elif '/i/' in video_url:
+            public_key = video_url.split('/i/')[-1].split('?')[0]
+        else:
+            public_key = video_url.split('/')[-1]
+
+        logger.info(f"Validating Yandex Disk link with public_key: {public_key}")
+
+        # Call Yandex Disk API to validate the public link
+        api_url = f"https://cloud-api.yandex.net/v1/disk/public/resources?public_key={public_key}"
+
+        headers = {}
+        # Add OAuth token if available for better rate limits
+        oauth_token = os.getenv('YANDEX_OAUTH_TOKEN')
+        if oauth_token:
+            headers['Authorization'] = f'OAuth {oauth_token}'
+
+        response = requests.get(api_url, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            metadata = response.json()
+
+            # Check if it's a video file
+            file_name = metadata.get('name', '').lower()
+            video_extensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv', '.m4v']
+            is_video = any(file_name.endswith(ext) for ext in video_extensions)
+
+            if not is_video:
+                return {
+                    'is_valid': False,
+                    'is_yandex_disk': True,
+                    'error': 'File is not a video file',
+                    'file_name': file_name,
+                    'file_type': metadata.get('mime_type', 'unknown')
+                }
+
+            return {
+                'is_valid': True,
+                'is_yandex_disk': True,
+                'file_name': metadata.get('name'),
+                'file_size': metadata.get('size'),
+                'file_type': metadata.get('mime_type'),
+                'download_url': metadata.get('file'),
+                'message': 'Yandex Disk video file validated successfully'
+            }
+
+        else:
+            error_info = response.json() if response.content else {'error': 'Unknown error'}
+            return {
+                'is_valid': False,
+                'is_yandex_disk': True,
+                'error': 'Invalid or expired Yandex Disk link',
+                'status_code': response.status_code,
+                'details': error_info
+            }
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error validating Yandex Disk link: {e}")
+        return {
+            'is_valid': False,
+            'is_yandex_disk': True,
+            'error': 'Network error while validating link',
+            'details': str(e)
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error validating Yandex Disk link: {e}")
+        return {
+            'is_valid': False,
+            'is_yandex_disk': True,
+            'error': 'Unexpected error during validation',
+            'details': str(e)
+        }
+
 def handle_submit_task(event):
     """Handle POST /api/submit"""
     try:
@@ -677,6 +923,23 @@ def handle_submit_task(event):
                 'headers': {'Content-Type': 'application/json'},
                 'body': json.dumps({'error': 'Please provide both title and video URL'})
             }
+
+        # Validate Yandex Disk link if applicable
+        logger.info(f"Validating video URL: {video_url}")
+        validation_result = validate_yandex_disk_link(video_url)
+
+        if not validation_result.get('is_valid', False):
+            logger.error(f"Video URL validation failed: {validation_result}")
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'Invalid video URL',
+                    'validation_details': validation_result
+                })
+            }
+
+        logger.info(f"Video URL validation successful: {validation_result.get('message', 'Valid URL')}")
 
         task_id = str(uuid.uuid4())
         task = {
@@ -761,6 +1024,183 @@ def handle_task_status_lookup(task_id):
             'body': json.dumps({'error': str(e)})
         }
 
+def handle_delete_task(task_id):
+    """Handle DELETE /api/tasks/{task_id}"""
+    try:
+        tasks = get_tasks_from_storage()
+        logger.info("Attempting to delete task_id: " + task_id + " from " + str(len(tasks)) + " tasks")
+
+        if task_id not in tasks:
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'Task not found',
+                    'task_id': task_id,
+                    'available_tasks': list(tasks.keys())
+                })
+            }
+
+        # Delete task file from S3
+        try:
+            s3_client.delete_object(Bucket=BUCKET_NAME, Key=f'tasks/{task_id}.json')
+            logger.info(f"Deleted task file: tasks/{task_id}.json")
+        except Exception as e:
+            logger.error(f"Failed to delete task file: {e}")
+            # Continue even if file deletion fails
+
+        # Also delete transcription file if it exists
+        try:
+            s3_client.delete_object(Bucket=BUCKET_NAME, Key=f'transcriptions/{task_id}.txt')
+            logger.info(f"Deleted transcription file: transcriptions/{task_id}.txt")
+        except Exception as e:
+            logger.info(f"No transcription file to delete: {e}")
+
+        # Also delete notes PDF if it exists
+        try:
+            s3_client.delete_object(Bucket=BUCKET_NAME, Key=f'results/{task_id}/notes.pdf')
+            logger.info(f"Deleted notes PDF: results/{task_id}/notes.pdf")
+        except Exception as e:
+            logger.info(f"No notes PDF to delete: {e}")
+
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({
+                'message': 'Task deleted successfully',
+                'task_id': task_id,
+                'deleted_task': tasks[task_id]
+            })
+        }
+
+    except Exception as e:
+        logger.error("Error in handle_delete_task: " + str(e))
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
+
+def handle_download_transcription(task_id):
+    """Handle transcription download"""
+    try:
+        tasks = get_tasks_from_storage()
+
+        if task_id not in tasks:
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'Task not found',
+                    'task_id': task_id
+                })
+            }
+
+        task = tasks[task_id]
+
+        # Check if task has transcription
+        if not task.get('transcription'):
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'No transcription available for this task',
+                    'task_id': task_id,
+                    'task_status': task.get('status', 'unknown')
+                })
+            }
+
+        # Prepare transcription content
+        transcription_content = f"""Lecture Transcription
+=====================
+
+Title: {task.get('title', 'Unknown')}
+Video URL: {task.get('video_url', 'Unknown')}
+Task ID: {task_id}
+Status: {task.get('status', 'Unknown')}
+Created: {task.get('created_at', 'Unknown')}
+Description: {task.get('description', 'No description')}
+
+Video Duration: {task.get('video_duration', 'Unknown')} seconds
+Transcription Characters: {len(task.get('transcription', ''))}
+
+TRANSCRIPTION:
+-------------
+{task.get('transcription', '')}
+
+---
+Generated by Yandex Cloud SpeechKit
+Lecture Notes Generator
+"""
+
+        # Return as downloadable text file
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'text/plain',
+                'Content-Disposition': f'attachment; filename="transcription_{task_id}.txt"',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': transcription_content
+        }
+
+    except Exception as e:
+        logger.error("Error in handle_download_transcription: " + str(e))
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
+
+def handle_download_pdf(task_id):
+    """Handle PDF download"""
+    try:
+        tasks = get_tasks_from_storage()
+
+        if task_id not in tasks:
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'Task not found',
+                    'task_id': task_id
+                })
+            }
+
+        task = tasks[task_id]
+
+        # Check if task has PDF
+        if not task.get('pdf_url'):
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'PDF not available for this task',
+                    'task_id': task_id,
+                    'task_status': task.get('status', 'unknown')
+                })
+            }
+
+        pdf_url = task.get('pdf_url')
+
+        # Redirect to the PDF URL in object storage
+        return {
+            'statusCode': 302,
+            'headers': {
+                'Location': pdf_url,
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': ''
+        }
+
+    except Exception as e:
+        logger.error("Error in handle_download_pdf: " + str(e))
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
+
 def handle_get_status(task_id):
     """Handle GET /api/status/{task_id}"""
     return handle_task_status_lookup(task_id)
@@ -783,3 +1223,4 @@ if __name__ == '__main__':
 # Dual-route workaround - Thu Dec 18 10:25:00 AM MSK 2025
 # Inline implementation fix - Thu Dec 18 10:30:00 AM MSK 2025
 # Query parameter workaround - Thu Dec 18 10:35:00 AM MSK 2025
+# Add delete and transcription download - Thu Dec 18 10:40:00 AM MSK 2025

@@ -1,3 +1,4 @@
 boto3==1.26.0
 requests==2.31.0
 yandexcloud==0.270.0
+reportlab>=3.6.0

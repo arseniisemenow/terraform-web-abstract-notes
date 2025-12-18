@@ -80,6 +80,9 @@ resource "yandex_function" "worker" {
     STORAGE_ACCESS_KEY = yandex_iam_service_account_static_access_key.main.access_key
     STORAGE_SECRET_KEY = yandex_iam_service_account_static_access_key.main.secret_key
     QUEUE_URL = yandex_message_queue.main.id
+    SA_KEY_ID = yandex_iam_service_account_static_access_key.main.access_key
+    YC_TOKEN = var.yc_token
+    SERVICE_ACCOUNT_ID = yandex_iam_service_account.main.id
   }
 
   content {
@@ -142,6 +145,30 @@ paths:
           description: Bad Request
         '500':
           description: Internal Server Error
+  /api/tasks/delete:
+    post:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: ${yandex_function.api.id}
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '404':
+          description: Task not found
+  /api/transcription:
+    get:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: ${yandex_function.api.id}
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '404':
+          description: Task not found
   /api/status:
     get:
       x-yc-apigateway-integration:
@@ -184,6 +211,18 @@ paths:
           description: OK
         '404':
           description: File not available
+  /api/pdf:
+    get:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: ${yandex_function.api.id}
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '404':
+          description: PDF not found
 EOF
 }
 
