@@ -112,7 +112,7 @@ resource "yandex_api_gateway" "main" {
 openapi: 3.0.0
 info:
   title: Lecture Notes Generator API
-  version: 1.0.0
+  version: 1.0.1
 paths:
   /:
     get:
@@ -142,22 +142,32 @@ paths:
           description: Bad Request
         '500':
           description: Internal Server Error
-  /api/status/{task_id}:
+  /api/status:
     get:
       x-yc-apigateway-integration:
         type: cloud_functions
         function_id: ${yandex_function.api.id}
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+  /api/status/{task_id}:
+    get:
       parameters:
         - name: task_id
           in: path
           required: true
           schema:
             type: string
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: ${yandex_function.api.id}
       responses:
         '200':
           description: OK
-        '404':
-          description: Task not found
+        '400':
+          description: Bad Request
   /download/{task_id}/notes:
     get:
       x-yc-apigateway-integration:

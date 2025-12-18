@@ -86,6 +86,8 @@ def handle_api_gateway_request(event):
     path = event.get('path', '/')
     method = event.get('httpMethod', 'GET')
 
+    logger.info("API request: " + method + " " + path + " - v2")
+
     try:
         if method == 'GET' and path == '/':
             return handle_index()
@@ -93,10 +95,46 @@ def handle_api_gateway_request(event):
             return handle_get_all_tasks()
         elif method == 'POST' and path == '/api/submit':
             return handle_submit_task(event)
+        elif method == 'GET' and path == '/api/status':
+            # Query parameter workaround for broken path parameter extraction
+            query_params = event.get('queryStringParameters') or {}
+            task_id = query_params.get('task_id', '')
+            logger.info("Status request via query parameter for task_id: " + task_id)
+
+            if not task_id:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'task_id query parameter is required',
+                        'example': '/api/status?task_id=<your-task-id>',
+                        'available_tasks': list(get_tasks_from_storage().keys())[:5]
+                    })
+                }
+
+            # Handle the task lookup
+            return handle_task_status_lookup(task_id)
         elif method == 'GET' and path.startswith('/api/status/'):
+            # Path parameter approach (currently broken due to Yandex API Gateway bug)
             task_id = path.split('/')[-1]
-            return handle_get_status(task_id)
+            logger.info("Status request for task_id: " + task_id + " (from path: " + path + ")")
+
+            # Check if we got the literal "{task_id}" string (broken path parameter extraction)
+            if task_id == '{task_id}':
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'Yandex API Gateway path parameter extraction issue',
+                        'workaround': 'Use query parameter: /api/status?task_id=<task_id>',
+                        'available_tasks': list(get_tasks_from_storage().keys())[:5]
+                    })
+                }
+
+            # Handle the task lookup
+            return handle_task_status_lookup(task_id)
         else:
+            logger.info("No route found for: " + method + " " + path)
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json'},
@@ -576,7 +614,7 @@ def handle_index():
         // Update individual task status
         async function updateTaskStatus(taskId) {
             try {
-                const response = await fetch(`/api/status/${taskId}`);
+                const response = await fetch(`/api/status?task_id=${taskId}`);
                 if (response.ok) {
                     const updatedTask = await response.json();
                     if (queueData[taskId]) {
@@ -691,33 +729,41 @@ def handle_submit_task(event):
             'body': json.dumps({'error': str(e)})
         }
 
-def handle_get_status(task_id):
-    """Handle GET /api/status/{task_id}"""
+def handle_task_status_lookup(task_id):
+    """Shared function for task status lookup"""
     try:
-        # Get task from persistent storage
         tasks = get_tasks_from_storage()
-        task = tasks.get(task_id)
+        logger.info("Looking for task_id: " + task_id + " in " + str(len(tasks)) + " tasks")
 
-        if not task:
+        if task_id in tasks:
+            logger.info("Found task: " + task_id)
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps(tasks[task_id])
+            }
+        else:
+            logger.warning("Task not found: " + task_id)
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json'},
-                'body': json.dumps({'error': 'Task not found'})
+                'body': json.dumps({
+                    'error': 'Task not found',
+                    'task_id': task_id,
+                    'available_tasks': list(tasks.keys())
+                })
             }
-
-        # Simply return current task status - worker will update it
-        return {
-            'statusCode': 200,
-            'headers': {'Content-Type': 'application/json'},
-            'body': json.dumps(task)
-        }
     except Exception as e:
-        logger.error(f"Error in handle_get_status: {e}")
+        logger.error("Error in handle_task_status_lookup: " + str(e))
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json'},
             'body': json.dumps({'error': str(e)})
         }
+
+def handle_get_status(task_id):
+    """Handle GET /api/status/{task_id}"""
+    return handle_task_status_lookup(task_id)
 
 def handle_direct_request(event):
     """Handle direct function invocation"""
@@ -729,4 +775,11 @@ def handle_direct_request(event):
 
 if __name__ == '__main__':
     # For local testing
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=True)# Force update - Thu Dec 18 09:45:18 AM MSK 2025
+# Debug update - Thu Dec 18 09:50:04 AM MSK 2025
+# Simplified path parameter handling - Thu Dec 18 09:55:00 AM MSK 2025
+# Switch to query parameters - Thu Dec 18 10:15:00 AM MSK 2025
+# Hybrid approach for testing - Thu Dec 18 10:20:00 AM MSK 2025
+# Dual-route workaround - Thu Dec 18 10:25:00 AM MSK 2025
+# Inline implementation fix - Thu Dec 18 10:30:00 AM MSK 2025
+# Query parameter workaround - Thu Dec 18 10:35:00 AM MSK 2025
