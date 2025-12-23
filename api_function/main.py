@@ -6,6 +6,7 @@ import requests
 from datetime import datetime
 import logging
 from flask import Flask, request, jsonify
+from urllib.parse import quote
 import re
 
 app = Flask(__name__)
@@ -186,6 +187,23 @@ def handle_api_gateway_request(event):
                 }
 
             return handle_download_pdf(task_id)
+        elif method == 'GET' and path == '/api/mp3':
+            # MP3 download endpoint
+            query_params = event.get('queryStringParameters') or {}
+            task_id = query_params.get('task_id', '')
+            logger.info("MP3 download request for task_id: " + task_id)
+
+            if not task_id:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'task_id query parameter is required',
+                        'example': '/api/mp3?task_id=<task-id>'
+                    })
+                }
+
+            return handle_download_mp3(task_id)
         elif method == 'GET' and path == '/api/status':
             # Query parameter workaround for broken path parameter extraction
             query_params = event.get('queryStringParameters') or {}
@@ -619,6 +637,22 @@ def handle_index():
                         </div>
                     </div>
                 `;
+            } else if (task.status === 'completed' && task.mp3_url) {
+                // Show MP3 download if no transcription but MP3 is available
+                transcriptionHTML = `
+                    <div class="transcription-container">
+                        <div class="transcription-title">
+                            🎵 Audio Extracted
+                        </div>
+                        <div class="transcription-text">
+                            Video has been converted to MP3 format.
+                        </div>
+                        ${task.video_duration ? `<div class="transcription-meta">Duration: ${Math.round(task.video_duration)}s</div>` : ''}
+                        <div style="margin-top: 10px;">
+                            <a href="/api/mp3?task_id=${taskId}" class="download-btn" download style="background: linear-gradient(135deg, #3498db, #2980b9);">🎵 Download MP3</a>
+                        </div>
+                    </div>
+                `;
             }
 
             return `
@@ -833,19 +867,16 @@ def validate_yandex_disk_link(video_url):
                 'message': 'Not a Yandex Disk link'
             }
 
-        # Extract public key from Yandex Disk URL
-        # Handle different URL formats
-        if '/d/' in video_url:
-            public_key = video_url.split('/d/')[-1].split('?')[0]
-        elif '/i/' in video_url:
-            public_key = video_url.split('/i/')[-1].split('?')[0]
-        else:
-            public_key = video_url.split('/')[-1]
+        # Use the full URL for Yandex Disk API validation
+        # The /i/ links (resource info) require the full URL to work
+        # Using full URL for all link types is the safest approach
+        logger.info(f"Validating Yandex Disk link (using full URL): {video_url}")
 
-        logger.info(f"Validating Yandex Disk link with public_key: {public_key}")
-
-        # Call Yandex Disk API to validate the public link
-        api_url = f"https://cloud-api.yandex.net/v1/disk/public/resources?public_key={public_key}"
+        # Call Yandex Disk API to validate the public link (URL-encode the full URL)
+        encoded_key = quote(video_url, safe='')
+        api_url = f"https://cloud-api.yandex.net/v1/disk/public/resources?public_key={encoded_key}"
+        logger.info(f"Encoded key: {encoded_key[:100]}...")
+        logger.info(f"API URL: {api_url[:150]}...")
 
         headers = {}
         # Add OAuth token if available for better rate limits
@@ -854,6 +885,7 @@ def validate_yandex_disk_link(video_url):
             headers['Authorization'] = f'OAuth {oauth_token}'
 
         response = requests.get(api_url, headers=headers, timeout=10)
+        logger.info(f"API response status: {response.status_code}")
 
         if response.status_code == 200:
             metadata = response.json()
@@ -1063,6 +1095,13 @@ def handle_delete_task(task_id):
         except Exception as e:
             logger.info(f"No notes PDF to delete: {e}")
 
+        # Also delete MP3 if it exists
+        try:
+            s3_client.delete_object(Bucket=BUCKET_NAME, Key=f'mp3/{task_id}.mp3')
+            logger.info(f"Deleted MP3: mp3/{task_id}.mp3")
+        except Exception as e:
+            logger.info(f"No MP3 to delete: {e}")
+
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json'},
@@ -1195,6 +1234,55 @@ def handle_download_pdf(task_id):
 
     except Exception as e:
         logger.error("Error in handle_download_pdf: " + str(e))
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
+
+def handle_download_mp3(task_id):
+    """Handle MP3 download"""
+    try:
+        tasks = get_tasks_from_storage()
+
+        if task_id not in tasks:
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'Task not found',
+                    'task_id': task_id
+                })
+            }
+
+        task = tasks[task_id]
+
+        # Check if task has MP3
+        if not task.get('mp3_url'):
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'MP3 not available for this task',
+                    'task_id': task_id,
+                    'task_status': task.get('status', 'unknown')
+                })
+            }
+
+        mp3_url = task.get('mp3_url')
+
+        # Redirect to the MP3 URL in object storage
+        return {
+            'statusCode': 302,
+            'headers': {
+                'Location': mp3_url,
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': ''
+        }
+
+    except Exception as e:
+        logger.error("Error in handle_download_mp3: " + str(e))
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json'},

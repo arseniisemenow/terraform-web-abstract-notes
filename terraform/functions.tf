@@ -63,7 +63,7 @@ resource "yandex_function" "api" {
 # Worker Serverless Function
 resource "yandex_function" "worker" {
   name               = "${var.prefix}-worker"
-  description        = "Worker for video transcription using SpeechKit"
+  description        = "Worker for video to MP3 conversion using imageio_ffmpeg"
   folder_id          = var.folder_id
   runtime            = "python311"
   entrypoint         = "main.handler"
@@ -81,7 +81,6 @@ resource "yandex_function" "worker" {
     STORAGE_SECRET_KEY = yandex_iam_service_account_static_access_key.main.secret_key
     QUEUE_URL = yandex_message_queue.main.id
     SA_KEY_ID = yandex_iam_service_account_static_access_key.main.access_key
-    YC_TOKEN = var.yc_token
     SERVICE_ACCOUNT_ID = yandex_iam_service_account.main.id
   }
 
@@ -92,9 +91,7 @@ resource "yandex_function" "worker" {
   user_hash = filesha256(data.archive_file.worker_function_zip.output_path)
 
   depends_on = [
-    yandex_iam_service_account.main,
-    yandex_message_queue.main,
-    yandex_storage_bucket.main
+    yandex_iam_service_account.main
   ]
 }
 
@@ -223,6 +220,18 @@ paths:
           description: Bad Request
         '404':
           description: PDF not found
+  /api/mp3:
+    get:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: ${yandex_function.api.id}
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '404':
+          description: MP3 not found
 EOF
 }
 

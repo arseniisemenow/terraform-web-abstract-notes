@@ -4,8 +4,6 @@ import uuid
 import requests
 import tempfile
 import subprocess
-import math
-import struct
 import re
 from datetime import datetime
 import boto3
@@ -17,6 +15,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.units import inch
+from moviepy import VideoFileClip
+from urllib.parse import quote
 
 # Debug update - Fix worker queue trigger handling - Thu Dec 18 10:45:00 AM MSK 2025
 # Add math import and fallback audio extraction - Thu Dec 18 11:00:00 AM MSK 2025
@@ -24,8 +24,9 @@ from reportlab.lib.units import inch
 # Fix video download with SSL handling - Thu Dec 18 11:10:00 AM MSK 2025
 # Simplify IAM token approach - Thu Dec 18 11:15:00 AM MSK 2025
 # Working SpeechKit implementation with fallback - Thu Dec 18 11:20:00 AM MSK 2025
+# Use moviepy for MP3 conversion - Mon Dec 23 2025
 
-# Configure logging
+# Configure logging (must be before any function that uses logger)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -65,36 +66,43 @@ class LectureNotesWorker:
             r'https://disk\.yandex\.[a-z]+/d/',
             r'https://yadi\.sk/d/',
             r'https://disk\.yandex\.[a-z]+/i/',
+            r'https://disk\.360\.yandex\.[a-z]+/d/',
         ]
         return any(re.match(pattern, url) for pattern in yandex_disk_patterns)
 
     def download_yandex_disk_video(self, video_url, task_id, temp_dir, video_path):
-        """Download video from Yandex Disk public link"""
+        """Download video from Yandex Disk public link using REST API"""
         try:
-            logger.info(f"Downloading from Yandex Disk: {video_url}")
+            logger.info(f"Yandex Disk download started")
+            logger.info(f"  Public URL: {video_url}")
 
-            # Extract public key from Yandex Disk URL
-            if '/d/' in video_url:
-                public_key = video_url.split('/d/')[-1].split('?')[0]
-            elif '/i/' in video_url:
-                public_key = video_url.split('/i/')[-1].split('?')[0]
-            else:
-                public_key = video_url.split('/')[-1]
+            # Use Yandex Disk REST API to get direct download URL
+            # The API accepts the full URL as public_key parameter (must be URL-encoded)
+            encoded_key = quote(video_url, safe='')
+            api_url = f"https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key={encoded_key}"
+            logger.info(f"  API call: GET /public/resources/download")
+            logger.info(f"  Original video URL: {video_url}")
+            logger.info(f"  Encoded public_key: {encoded_key[:100]}...")
+            logger.info(f"  Full API URL: {api_url[:150]}...")
 
-            logger.info(f"Yandex Disk public_key: {public_key}")
+            response = requests.get(api_url, timeout=10)
 
-            # Get download URL from Yandex Disk API
-            api_url = f"https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key={public_key}"
+            logger.info(f"  API response status: {response.status_code}")
 
-            headers = {}
-            oauth_token = os.getenv('YANDEX_OAUTH_TOKEN')
-            if oauth_token:
-                headers['Authorization'] = f'OAuth {oauth_token}'
-
-            response = requests.get(api_url, headers=headers, timeout=10)
-
-            if response.status_code != 200:
-                logger.error(f"Failed to get download URL: {response.status_code} - {response.text}")
+            if response.status_code == 404:
+                error_msg = response.text
+                logger.error(f"  ERROR: Resource not found (404)")
+                logger.error(f"  API response: {error_msg[:200]}")
+                raise Exception(
+                    f"Yandex Disk resource not found. This could mean:\n"
+                    f"1. The link has expired or was deleted\n"
+                    f"2. Invalid URL format\n"
+                    f"3. Resource is private and not publicly accessible\n"
+                    f"API Error: {error_msg[:200]}"
+                )
+            elif response.status_code != 200:
+                logger.error(f"  ERROR: API returned {response.status_code}")
+                logger.error(f"  API response: {response.text[:200]}")
                 raise Exception(f"Yandex Disk API error: {response.status_code}")
 
             download_info = response.json()
@@ -103,7 +111,8 @@ class LectureNotesWorker:
             if not download_url:
                 raise Exception("No download URL received from Yandex Disk API")
 
-            logger.info(f"Got download URL, downloading file...")
+            logger.info(f"  ✓ Got direct download URL")
+            logger.info(f"  Starting file download...")
 
             # Download the actual video file
             download_response = requests.get(
@@ -124,7 +133,9 @@ class LectureNotesWorker:
                         downloaded_size += len(chunk)
 
             file_size = os.path.getsize(video_path)
-            logger.info(f"Downloaded {file_size} bytes from Yandex Disk")
+            file_size_mb = file_size / (1024 * 1024)
+            logger.info(f"  ✓ Download complete: {file_size:,} bytes ({file_size_mb:.2f} MB)")
+            logger.info(f"  ✓ Saved to: {video_path}")
 
             if file_size == 0:
                 raise Exception("Downloaded file is empty")
@@ -224,7 +235,8 @@ class LectureNotesWorker:
     def download_video(self, video_url, task_id):
         """Download video from URL with enhanced error handling and Yandex Disk support"""
         try:
-            logger.info(f"Downloading video from {video_url}")
+            logger.info(f"Starting download for task {task_id}")
+            logger.info(f"  Source URL: {video_url}")
 
             # Create temporary directory
             temp_dir = tempfile.mkdtemp()
@@ -232,9 +244,10 @@ class LectureNotesWorker:
 
             # Check if this is a Yandex Disk link and handle it specifically
             if self.is_yandex_disk_link(video_url):
-                logger.info("Detected Yandex Disk link, using specialized download")
+                logger.info("  → Yandex Disk link detected, using API download method")
                 return self.download_yandex_disk_video(video_url, task_id, temp_dir, video_path)
 
+            logger.info("  → Regular HTTP(S) download method")
             # Enhanced download with better error handling
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -295,69 +308,43 @@ class LectureNotesWorker:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return None, None
 
-    def extract_audio(self, video_path, task_id):
-        """Extract audio from video - fallback to dummy audio for testing"""
+    def convert_to_mp3(self, video_path, task_id):
+        """Convert video to MP3 using moviepy"""
         try:
-            logger.info("Extracting audio from video")
+            logger.info("Converting video to MP3 using moviepy")
 
-            audio_path = os.path.join(os.path.dirname(video_path), f"{task_id}.wav")
+            # Define output path for MP3
+            mp3_path = os.path.join(os.path.dirname(video_path) or '/tmp', f"{task_id}.mp3")
 
-            # Try ffmpeg first (in case it's available)
-            cmd = [
-                'ffmpeg', '-i', video_path,
-                '-vn',  # No video
-                '-acodec', 'pcm_s16le',  # 16-bit PCM
-                '-ar', '16000',  # 16kHz sample rate
-                '-ac', '1',  # Mono
-                '-y',  # Overwrite output file
-                audio_path
-            ]
+            # Load video and extract audio
+            video = VideoFileClip(video_path)
+            audio = video.audio
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0:
-                logger.info(f"Audio extracted using ffmpeg: {audio_path}")
-                return audio_path
-            else:
-                logger.warning(f"FFmpeg not available: {result.stderr}")
-                logger.info("Creating dummy audio file for testing")
+            if audio is None:
+                raise Exception("Video has no audio track")
+
+            # Write audio to MP3
+            logger.info(f"Writing audio to MP3: {mp3_path}")
+            audio.write_audiofile(mp3_path, codec='libmp3lame', bitrate='192k', logger=None)
+
+            # Close video to free resources
+            video.close()
+            audio.close()
+
+            # Verify the file was created
+            if not os.path.exists(mp3_path):
+                raise Exception(f"MP3 file was not created at {mp3_path}")
+
+            file_size = os.path.getsize(mp3_path)
+            if file_size == 0:
+                raise Exception("MP3 file is empty")
+
+            logger.info(f"MP3 conversion successful: {mp3_path} ({file_size} bytes)")
+            return mp3_path
 
         except Exception as e:
-            logger.warning(f"FFmpeg extraction failed: {e}")
-            logger.info("Creating dummy audio file for testing")
-
-        # Create dummy audio for testing SpeechKit
-        try:
-            import wave
-            import struct
-
-            # Create a simple WAV file header and data
-            sample_rate = 16000
-            duration = 3  # 3 seconds
-            frequency = 440  # A4 note
-            amplitude = 8000
-
-            num_samples = int(sample_rate * duration)
-            with wave.open(audio_path, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(sample_rate)
-
-                # Generate sine wave
-                for i in range(num_samples):
-                    value = int(amplitude * math.sin(2 * math.pi * frequency * i / sample_rate))
-                    wav_file.writeframes(struct.pack('<h', value))
-
-            logger.info(f"Created dummy audio file: {audio_path}")
-            return audio_path
-
-        except Exception as e:
-            logger.error(f"Failed to create dummy audio: {e}")
-            # As last resort, create minimal WAV file
-            with open(audio_path, 'wb') as f:
-                # Minimal WAV header (44 bytes)
-                f.write(b'RIFF\x36\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00')
-            logger.warning(f"Created minimal audio file: {audio_path}")
-            return audio_path
+            logger.error(f"Failed to convert to MP3: {e}")
+            raise Exception(f"MP3 conversion failed: {e}")
 
     def transcribe_audio_speechkit(self, audio_path, task_id):
         """Transcribe audio using Yandex SpeechKit - REAL TRANSCRIPTION ONLY"""
@@ -533,14 +520,18 @@ class LectureNotesWorker:
             logger.error(f"Failed to delete message from queue: {e}")
 
     def process_task(self, task_data):
-        """Process a single transcription task"""
+        """Process a single task - convert video to MP3"""
         try:
             task_id = task_data['task_id']
             video_url = task_data['video_url']
             title = task_data['title']
             description = task_data.get('description', '')
 
-            logger.info(f"Processing task {task_id}: {title}")
+            logger.info(f"="*60)
+            logger.info(f"PROCESSING TASK: {task_id}")
+            logger.info(f"  Title: {title}")
+            logger.info(f"  Video URL: {video_url}")
+            logger.info(f"="*60)
 
             # Update task status to processing
             self.update_task_status(task_id, 'processing', 10, "Downloading video...")
@@ -552,75 +543,35 @@ class LectureNotesWorker:
                 return False
 
             # Update progress
-            self.update_task_status(task_id, 'processing', 30, "Extracting audio...")
+            self.update_task_status(task_id, 'processing', 40, "Converting to MP3...")
 
-            # Step 2: Extract audio
-            audio_path = self.extract_audio(video_path, task_id)
-            if not audio_path:
-                self.update_task_status(task_id, 'failed', 0, "Failed to extract audio")
+            # Step 2: Convert to MP3
+            mp3_path = self.convert_to_mp3(video_path, task_id)
+            if not mp3_path:
+                self.update_task_status(task_id, 'failed', 0, "Failed to convert to MP3")
                 return False
 
             # Update progress
-            self.update_task_status(task_id, 'processing', 50, "Transcribing audio...")
+            self.update_task_status(task_id, 'processing', 80, "Uploading MP3...")
 
-            # Step 3: Transcribe with SpeechKit
-            transcription = self.transcribe_audio_speechkit(audio_path, task_id)
-            if not transcription:
-                self.update_task_status(task_id, 'failed', 0, "Failed to transcribe audio")
+            # Step 3: Upload MP3 to storage
+            mp3_storage_key = f"mp3/{task_id}.mp3"
+            mp3_url = self.upload_to_storage(mp3_path, mp3_storage_key)
+
+            if not mp3_url:
+                self.update_task_status(task_id, 'failed', 0, "Failed to upload MP3")
                 return False
 
-            # Update progress
-            self.update_task_status(task_id, 'processing', 80, "Saving results...")
-
-            # Step 4: Save transcription to storage
-            transcript_object = f"transcriptions/{task_id}.txt"
-            transcript_content = f"""Lecture: {title}
-
-Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-Description: {description}
-
-Video URL: {video_url}
-
---- TRANSCRIPTION ---
-
-{transcription}
-
---- END OF TRANSCRIPTION ---
-"""
-
-            # Write transcription to temporary file
-            transcript_file = os.path.join(temp_dir, f"{task_id}_transcription.txt")
-            with open(transcript_file, 'w', encoding='utf-8') as f:
-                f.write(transcript_content)
-
-            # Upload to storage
-            transcript_url = self.upload_to_storage(transcript_file, transcript_object)
-
-            # Update progress for PDF generation
-            self.update_task_status(task_id, 'processing', 85, "Generating lecture notes...")
-
-            # Step 5: Process transcription text with GPT
-            processed_text = self.process_text_with_gpt(transcription, title)
-
-            # Step 6: Generate PDF notes
-            pdf_path = self.generate_pdf_notes(processed_text, title, task_id)
-
-            # Step 7: Save PDF to storage
-            pdf_url = self.save_pdf_to_storage(pdf_path, task_id, title)
-
-            # Step 8: Update task as completed
+            # Step 4: Update task as completed
             task_result = {
-                'transcription': transcription,
-                'transcript_url': transcript_url,
-                'pdf_url': pdf_url,
+                'mp3_url': mp3_url,
                 'processed_at': datetime.now().isoformat(),
                 'video_duration': self.get_video_duration(video_path)
             }
 
-            self.update_task_status(task_id, 'completed', 100, "Processing completed", task_result)
+            self.update_task_status(task_id, 'completed', 100, "MP3 conversion completed", task_result)
 
-            logger.info(f"Task {task_id} completed successfully")
+            logger.info(f"Task {task_id} completed successfully - MP3 available at: {mp3_url}")
             return True
 
         except Exception as e:
@@ -632,7 +583,7 @@ Video URL: {video_url}
         finally:
             # Cleanup temporary files
             try:
-                if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                if 'temp_dir' in locals() and temp_dir and os.path.exists(temp_dir):
                     import shutil
                     shutil.rmtree(temp_dir)
                     logger.info(f"Cleaned up temporary directory: {temp_dir}")
@@ -640,17 +591,12 @@ Video URL: {video_url}
                 logger.error(f"Failed to cleanup temp directory: {e}")
 
     def get_video_duration(self, video_path):
-        """Get video duration using ffmpeg"""
+        """Get video duration using moviepy"""
         try:
-            cmd = [
-                'ffprobe', '-v', 'error', '-show_entries',
-                'format=duration', '-of', 'csv=p=0', video_path
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0:
-                return float(result.stdout.strip())
-            return None
+            video = VideoFileClip(video_path)
+            duration = video.duration
+            video.close()
+            return duration
         except:
             return None
 

@@ -19,3 +19,10 @@ variable "yc_token" {
   description = "Yandex Cloud token (from environment)"
   sensitive   = true
 }
+
+variable "yandex_oauth_token" {
+  type        = string
+  description = "Yandex OAuth token for accessing private Yandex Disk resources"
+  sensitive   = true
+  default     = ""
+}
