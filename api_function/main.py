@@ -851,13 +851,8 @@ def validate_yandex_disk_link(video_url):
     """Validate Yandex Disk public link and get file metadata"""
     try:
         # Check if this is a Yandex Disk public link
-        yandex_disk_patterns = [
-            r'https://disk\.yandex\.[a-z]+/d/',
-            r'https://yadi\.sk/d/',
-            r'https://disk\.yandex\.[a-z]+/i/',
-        ]
-
-        is_yandex_disk = any(re.match(pattern, video_url) for pattern in yandex_disk_patterns)
+        # Handle all formats: /d/ (download), /i/ (resource info)
+        is_yandex_disk = bool(re.match(r'https://(disk\.yandex\.[a-z]+|disk\.360\.yandex\.[a-z]+|yadi\.sk)/(d|i)/', video_url))
 
         if not is_yandex_disk:
             # Not a Yandex Disk link, assume it's valid

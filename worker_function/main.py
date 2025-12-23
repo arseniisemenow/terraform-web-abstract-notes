@@ -62,13 +62,11 @@ class LectureNotesWorker:
 
     def is_yandex_disk_link(self, url):
         """Check if URL is a Yandex Disk public link"""
-        yandex_disk_patterns = [
-            r'https://disk\.yandex\.[a-z]+/d/',
-            r'https://yadi\.sk/d/',
-            r'https://disk\.yandex\.[a-z]+/i/',
-            r'https://disk\.360\.yandex\.[a-z]+/d/',
-        ]
-        return any(re.match(pattern, url) for pattern in yandex_disk_patterns)
+        # Handle all Yandex Disk URL formats: /d/ (download), /i/ (resource info)
+        # Matches: disk.yandex.*, disk.360.yandex.*, yadi.sk
+        if not url:
+            return False
+        return bool(re.match(r'https://(disk\.yandex\.[a-z]+|disk\.360\.yandex\.[a-z]+|yadi\.sk)/(d|i)/', url))
 
     def download_yandex_disk_video(self, video_url, task_id, temp_dir, video_path):
         """Download video from Yandex Disk public link using REST API"""
@@ -140,8 +138,9 @@ class LectureNotesWorker:
             if file_size == 0:
                 raise Exception("Downloaded file is empty")
 
-            # Return temp_dir and video_path like the original method
-            return temp_dir, video_path
+            # Return video_path and temp_dir (correct order for consistency)
+            logger.info(f"Yandex Disk download returning: video_path={video_path}, temp_dir={temp_dir}")
+            return video_path, temp_dir
 
         except Exception as e:
             logger.error(f"Failed to download from Yandex Disk: {e}")
@@ -441,7 +440,8 @@ class LectureNotesWorker:
             self.s3_client.upload_file(
                 file_path,
                 self.storage_bucket,
-                object_name
+                object_name,
+                ExtraArgs={'ACL': 'public-read'}
             )
 
             # Generate public URL
@@ -538,6 +538,7 @@ class LectureNotesWorker:
 
             # Step 1: Download video
             video_path, temp_dir = self.download_video(video_url, task_id)
+            logger.info(f"Download completed. video_path={video_path}, temp_dir={temp_dir}")
             if not video_path:
                 self.update_task_status(task_id, 'failed', 0, "Failed to download video")
                 return False
