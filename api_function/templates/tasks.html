@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lecture Notes Generator - Tasks</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 15px 15px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            color: #333;
+            font-size: 1.8em;
+        }
+        .create-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+        .create-btn:hover {
+            transform: translateY(-2px);
+        }
+        .tasks-container {
+            background: white;
+            padding: 30px;
+            border-radius: 0 0 15px 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .tasks-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        .tasks-title {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #333;
+        }
+        .empty-tasks {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-style: italic;
+        }
+        .task-item {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+        .task-item:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .task-item.completed {
+            background: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .task-item.processing {
+            background: #fff3cd;
+            border-color: #ffeaa7;
+        }
+        .task-item.failed {
+            background: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .task-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .task-item-title {
+            font-weight: 600;
+            font-size: 1.1em;
+            color: #333;
+        }
+        .task-item-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-processing {
+            background: #ffc107;
+            color: #856404;
+        }
+        .status-completed {
+            background: #28a745;
+            color: #fff;
+        }
+        .status-failed {
+            background: #dc3545;
+            color: #fff;
+        }
+        .task-item-details {
+            margin: 10px 0;
+            font-size: 0.9em;
+            color: #666;
+        }
+        .task-item-details a {
+            color: #667eea;
+            word-break: break-all;
+        }
+        .progress-container {
+            margin: 10px 0;
+        }
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+        .progress-text {
+            text-align: center;
+            margin-top: 5px;
+            font-size: 0.8em;
+            color: #666;
+        }
+        .downloads-container {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(255,255,255,0.7);
+            border-radius: 8px;
+        }
+        .downloads-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+        }
+        .btn {
+            display: inline-block;
+            padding: 8px 16px;
+            margin-right: 10px;
+            margin-bottom: 8px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 0.85em;
+            font-weight: 500;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: none;
+        }
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #0056b3;
+            color: white;
+        }
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        .btn-success:hover {
+            background: #1e7e34;
+            color: white;
+        }
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+        .btn-info:hover {
+            background: #117a8b;
+            color: white;
+        }
+        .btn-purple {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+            color: white;
+        }
+        .btn-purple:hover {
+            background: linear-gradient(135deg, #8e44ad, #7d3c98);
+            color: white;
+        }
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+            color: white;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+        .task-meta {
+            font-size: 0.75em;
+            color: #999;
+            margin-top: 10px;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+        .notification.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .notification.error {
+            background: #dc3545;
+        }
+        .notification.success {
+            background: #28a745;
+        }
+        .status-badge-small {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7em;
+            font-weight: 600;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Lecture Notes Generator</h1>
+        <a href="/" class="create-btn">+ Create New Task</a>
+    </div>
+
+    <div class="tasks-container">
+        <div class="tasks-header">
+            <h2 class="tasks-title">Tasks</h2>
+            <span id="taskCount">0 items</span>
+        </div>
+
+        <div id="tasksList">
+            <div class="empty-tasks">
+                No tasks found. <a href="/">Create your first task</a> to get started!
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let tasksData = {};
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleString('ru-RU');
+        }
+
+        function getStatusBadgeClass(status) {
+            switch (status) {
+                case 'completed': return 'status-completed';
+                case 'processing': return 'status-processing';
+                case 'failed': return 'status-failed';
+                default: return 'status-processing';
+            }
+        }
+
+        function getStatusText(status) {
+            switch (status) {
+                case 'completed': return 'Completed';
+                case 'processing': return 'Processing';
+                case 'failed': return 'Failed';
+                case 'pending': return 'Pending';
+                default: return status;
+            }
+        }
+
+        function createTaskHTML(taskId, task) {
+            const statusClass = getStatusBadgeClass(task.status);
+            const statusText = getStatusText(task.status);
+            const taskItemClass = task.status === 'completed' ? 'completed' :
+                                  task.status === 'failed' ? 'failed' : 'processing';
+
+            let downloadsHTML = '';
+            let progressHTML = '';
+            let errorHTML = '';
+
+            // Progress bar for processing tasks
+            if (task.status === 'processing' && task.progress !== undefined) {
+                progressHTML = `
+                    <div class="progress-container">
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" style="width: ${task.progress}%"></div>
+                        </div>
+                        <div class="progress-text">${task.progress}% - ${task.status_message || 'Processing...'}</div>
+                    </div>
+                `;
+            }
+
+            // Error message for failed tasks
+            if (task.status === 'failed' && task.status_message) {
+                errorHTML = `<div class="error-message">Error: ${task.status_message}</div>`;
+            }
+
+            // Downloads section for completed tasks
+            if (task.status === 'completed') {
+                let downloadButtons = [];
+
+                // MP3 download button
+                if (task.mp3_url) {
+                    downloadButtons.push(`
+                        <a href="/api/mp3?task_id=${taskId}" class="btn btn-info" download>
+                            Audio (MP3)
+                        </a>
+                    `);
+                }
+
+                // Transcription download button
+                if (task.transcription) {
+                    downloadButtons.push(`
+                        <a href="/api/transcription?task_id=${taskId}" class="btn btn-primary" download>
+                            Transcription (TXT)
+                        </a>
+                    `);
+                }
+
+                // Abstract/Brief download button
+                if (task.abstract_url) {
+                    downloadButtons.push(`
+                        <a href="/api/abstract?task_id=${taskId}" class="btn btn-purple" download>
+                            Brief (MD)
+                        </a>
+                    `);
+                }
+
+                // PDF download button (if available)
+                if (task.pdf_url) {
+                    downloadButtons.push(`
+                        <a href="/api/pdf?task_id=${taskId}" class="btn btn-success" download>
+                            Notes (PDF)
+                        </a>
+                    `);
+                }
+
+                if (downloadButtons.length > 0) {
+                    downloadsHTML = `
+                        <div class="downloads-container">
+                            <div class="downloads-title">Available Downloads:</div>
+                            ${downloadButtons.join('')}
+                        </div>
+                    `;
+                }
+            }
+
+            // Delete button for all tasks
+            const deleteButton = `
+                <button onclick="deleteTask('${taskId}')" class="btn btn-danger">
+                    Delete
+                </button>
+            `;
+
+            return `
+                <div class="task-item ${taskItemClass}" id="task-${taskId}">
+                    <div class="task-item-header">
+                        <div class="task-item-title">
+                            ${task.title || 'Untitled'}
+                            <span class="status-badge-small ${statusClass}">${statusText}</span>
+                        </div>
+                        ${deleteButton}
+                    </div>
+                    <div class="task-item-details">
+                        <div><strong>Video URL:</strong> <a href="${task.video_url}" target="_blank">${task.video_url}</a></div>
+                        ${task.description ? `<div><strong>Description:</strong> ${task.description}</div>` : ''}
+                    </div>
+                    ${progressHTML}
+                    ${errorHTML}
+                    ${downloadsHTML}
+                    <div class="task-meta">
+                        ID: ${taskId} | Created: ${formatDate(task.created_at)}
+                        ${task.processed_at ? ` | Processed: ${formatDate(task.processed_at)}` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateTasksDisplay() {
+            const tasksList = document.getElementById('tasksList');
+            const taskCount = document.getElementById('taskCount');
+
+            const taskIds = Object.keys(tasksData);
+            taskCount.textContent = `${taskIds.length} item${taskIds.length !== 1 ? 's' : ''}`;
+
+            if (taskIds.length === 0) {
+                tasksList.innerHTML = `
+                    <div class="empty-tasks">
+                        No tasks found. <a href="/">Create your first task</a> to get started!
+                    </div>
+                `;
+                return;
+            }
+
+            // Sort tasks: processing first, then completed, then failed (all newest first)
+            const sortedTasks = taskIds.sort((a, b) => {
+                const aTask = tasksData[a];
+                const bTask = tasksData[b];
+
+                // Status priority: processing > completed > failed
+                const statusPriority = { 'processing': 0, 'completed': 1, 'failed': 2 };
+                const aPriority = statusPriority[aTask.status] ?? 3;
+                const bPriority = statusPriority[bTask.status] ?? 3;
+
+                if (aPriority !== bPriority) {
+                    return aPriority - bPriority;
+                }
+
+                // Same status - sort by date (newest first)
+                return new Date(bTask.created_at) - new Date(aTask.created_at);
+            });
+
+            tasksList.innerHTML = sortedTasks.map(taskId =>
+                createTaskHTML(taskId, tasksData[taskId])
+            ).join('');
+        }
+
+        async function fetchAllTasks() {
+            try {
+                const response = await fetch('/api/tasks');
+                if (response.ok) {
+                    tasksData = await response.json();
+                    updateTasksDisplay();
+                }
+            } catch (error) {
+                console.error('Error fetching tasks:', error);
+            }
+        }
+
+        async function updateTaskStatus(taskId) {
+            try {
+                const response = await fetch(`/api/status?task_id=${taskId}`);
+                if (response.ok) {
+                    const updatedTask = await response.json();
+                    if (tasksData[taskId]) {
+                        tasksData[taskId] = updatedTask;
+                        updateTasksDisplay();
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating task status:', error);
+            }
+        }
+
+        async function deleteTask(taskId) {
+            // Show confirmation UI
+            const taskElement = document.getElementById(`task-${taskId}`);
+            const confirmHTML = `
+                <div class="delete-confirm" style="margin-top: 10px;">
+                    <span style="color: #dc3545;">Are you sure? </span>
+                    <button class="btn btn-danger" onclick="confirmDelete('${taskId}')" style="padding: 4px 10px; font-size: 0.8em;">Yes, Delete</button>
+                    <button class="btn btn-primary" onclick="cancelDelete('${taskId}')" style="padding: 4px 10px; font-size: 0.8em; background: #6c757d;">Cancel</button>
+                </div>
+            `;
+            const deleteBtn = taskElement.querySelector('.btn-danger');
+            deleteBtn.insertAdjacentHTML('afterend', confirmHTML);
+            deleteBtn.style.display = 'none';
+        }
+
+        async function confirmDelete(taskId) {
+            try {
+                const response = await fetch('/api/tasks/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ task_id: taskId })
+                });
+
+                if (response.ok) {
+                    delete tasksData[taskId];
+                    updateTasksDisplay();
+                    showNotification('Task deleted successfully', 'success');
+                } else {
+                    const error = await response.json();
+                    showNotification(error.error || 'Failed to delete task', 'error');
+                    cancelDelete(taskId);
+                }
+            } catch (error) {
+                console.error('Error deleting task:', error);
+                showNotification('Network error. Please try again.', 'error');
+                cancelDelete(taskId);
+            }
+        }
+
+        function cancelDelete(taskId) {
+            const taskElement = document.getElementById(`task-${taskId}`);
+            const confirmDiv = taskElement.querySelector('.delete-confirm');
+            const deleteBtn = taskElement.querySelector('.btn-danger');
+            if (confirmDiv) confirmDiv.remove();
+            if (deleteBtn) deleteBtn.style.display = '';
+        }
+
+        function showNotification(message, type = 'success') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            requestAnimationFrame(() => {
+                notification.classList.add('show');
+            });
+
+            setTimeout(() => {
+                notification.classList.remove('show');
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        function updateLoop() {
+            fetchAllTasks();
+
+            // Update individual processing tasks
+            Object.keys(tasksData).forEach(taskId => {
+                const task = tasksData[taskId];
+                if (task.status === 'processing') {
+                    updateTaskStatus(taskId);
+                }
+            });
+        }
+
+        // Initial load
+        fetchAllTasks();
+        setInterval(updateLoop, 3000);
+    </script>
+</body>
+</html>
