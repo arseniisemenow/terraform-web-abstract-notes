@@ -234,6 +234,18 @@ paths:
           description: Bad Request
         '404':
           description: MP3 not found
+  /api/abstract:
+    get:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: ${yandex_function.api.id}
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '404':
+          description: Abstract not found
 EOF
 }
 

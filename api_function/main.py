@@ -242,6 +242,23 @@ def handle_api_gateway_request(event):
 
             # Handle the task lookup
             return handle_task_status_lookup(task_id)
+        elif method == 'GET' and path == '/api/abstract':
+            # Download lecture abstract as markdown
+            query_params = event.get('queryStringParameters') or {}
+            task_id = query_params.get('task_id', '')
+            logger.info("Abstract request for task_id: " + task_id)
+
+            if not task_id:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'error': 'task_id query parameter is required',
+                        'example': '/api/abstract?task_id=<task-id>'
+                    })
+                }
+
+            return handle_get_abstract(task_id)
         else:
             logger.info("No route found for: " + method + " " + path)
             return {
@@ -633,6 +650,7 @@ def handle_index():
                         ${task.video_duration ? `<div class="transcription-meta">Duration: ${Math.round(task.video_duration)}s | Characters: ${task.transcription.length}</div>` : ''}
                         <div style="margin-top: 10px;">
                             <a href="/api/transcription?task_id=${taskId}" class="download-btn" download>📄 Download Transcription</a>
+                            ${task.abstract_url ? `<a href="/api/abstract?task_id=${taskId}" class="download-btn" download style="background: linear-gradient(135deg, #9b59b6, #8e44ad);">📝 Download Abstract (MD)</a>` : ''}
                             ${task.pdf_url ? `<a href="${task.pdf_url}" class="download-btn" download style="background: linear-gradient(135deg, #e74c3c, #c0392b);">📋 Download PDF Notes</a>` : ''}
                         </div>
                     </div>
@@ -650,6 +668,7 @@ def handle_index():
                         ${task.video_duration ? `<div class="transcription-meta">Duration: ${Math.round(task.video_duration)}s</div>` : ''}
                         <div style="margin-top: 10px;">
                             <a href="/api/mp3?task_id=${taskId}" class="download-btn" download style="background: linear-gradient(135deg, #3498db, #2980b9);">🎵 Download MP3</a>
+                            ${task.abstract_url ? `<a href="/api/abstract?task_id=${taskId}" class="download-btn" download style="background: linear-gradient(135deg, #9b59b6, #8e44ad);">📝 Download Abstract (MD)</a>` : ''}
                         </div>
                     </div>
                 `;
@@ -1278,6 +1297,56 @@ def handle_download_mp3(task_id):
 
     except Exception as e:
         logger.error("Error in handle_download_mp3: " + str(e))
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
+
+def handle_get_abstract(task_id):
+    """Handle lecture abstract download as markdown"""
+    try:
+        tasks = get_tasks_from_storage()
+
+        if task_id not in tasks:
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'Task not found',
+                    'task_id': task_id
+                })
+            }
+
+        task = tasks[task_id]
+
+        # Check if task has abstract
+        if not task.get('abstract_url'):
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'error': 'Abstract not available for this task',
+                    'task_id': task_id,
+                    'task_status': task.get('status', 'unknown'),
+                    'hint': 'Abstract may still be generating or transcription failed'
+                })
+            }
+
+        abstract_url = task.get('abstract_url')
+
+        # Redirect to the abstract URL in object storage
+        return {
+            'statusCode': 302,
+            'headers': {
+                'Location': abstract_url,
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': ''
+        }
+
+    except Exception as e:
+        logger.error("Error in handle_get_abstract: " + str(e))
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json'},

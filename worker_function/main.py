@@ -552,6 +552,37 @@ class LectureNotesWorker:
             logger.error(f"Failed to upload to storage: {e}")
             return None
 
+    def upload_text_to_storage(self, content, object_name, content_type='text/plain'):
+        """Upload text content directly to Yandex Object Storage"""
+        try:
+            logger.info(f"Uploading text content to storage as {object_name}")
+
+            # Convert string to bytes
+            from io import BytesIO
+            content_bytes = content.encode('utf-8')
+
+            # Ensure charset is specified in Content-Type
+            if 'charset' not in content_type:
+                content_type = f"{content_type}; charset=utf-8"
+
+            self.s3_client.put_object(
+                Bucket=self.storage_bucket,
+                Key=object_name,
+                Body=content_bytes,
+                ContentType=content_type,
+                ACL='public-read'
+            )
+
+            # Generate public URL
+            file_url = f"https://storage.yandexcloud.net/{self.storage_bucket}/{object_name}"
+
+            logger.info(f"Text content uploaded successfully: {file_url}")
+            return file_url
+
+        except Exception as e:
+            logger.error(f"Failed to upload text to storage: {e}")
+            return None
+
     def update_task_status(self, task_id, status, progress, message, result=None):
         """Update task status in persistent storage"""
         try:
@@ -674,7 +705,30 @@ class LectureNotesWorker:
                 # Mark task as completed but note transcription error in status message
                 self.update_task_status(task_id, 'processing', 90, f"MP3 ready (transcription failed: {str(e)[:100]})")
 
-            # Step 5: Update task as completed
+            # Step 5: Generate abstract using YandexGPT
+            abstract_url = None
+            if transcription:
+                try:
+                    self.update_task_status(task_id, 'processing', 92, "Generating lecture abstract...")
+                    title = task_data.get('title', 'Лекция')
+                    logger.info(f"Generating abstract for lecture: {title}")
+
+                    abstract = self.process_text_with_gpt(transcription, title)
+
+                    if abstract:
+                        # Upload abstract to storage
+                        abstract_key = f"abstracts/{task_id}.md"
+                        abstract_url = self.upload_text_to_storage(
+                            abstract,
+                            abstract_key,
+                            content_type='text/markdown'
+                        )
+                        logger.info(f"Abstract uploaded to: {abstract_url}")
+                except Exception as e:
+                    logger.error(f"Abstract generation failed: {e}")
+                    # Continue without abstract - it's not critical
+
+            # Step 6: Update task as completed
             task_result = {
                 'mp3_url': mp3_url,
                 'processed_at': datetime.now().isoformat(),
@@ -684,9 +738,13 @@ class LectureNotesWorker:
             # Add transcription if successful
             if transcription:
                 task_result['transcription'] = transcription
-                status_message = "Processing completed - MP3 and transcription ready"
+                status_message = "Processing completed - MP3, transcription and abstract ready"
             else:
                 status_message = "Processing completed - MP3 ready (transcription unavailable)"
+
+            # Add abstract URL if generated
+            if abstract_url:
+                task_result['abstract_url'] = abstract_url
 
             self.update_task_status(task_id, 'completed', 100, status_message, task_result)
 
@@ -720,45 +778,144 @@ class LectureNotesWorker:
             return None
 
     def process_text_with_gpt(self, transcription_text, title):
-        """Process transcription text using Yandex GPT to generate structured notes"""
+        """Generate structured lecture abstract using YandexGPT Lite"""
         try:
-            logger.info("Processing transcription text with GPT...")
+            logger.info("=" * 80)
+            logger.info("Starting YandexGPT Lite abstract generation")
+            logger.info(f"Lecture title: {title}")
+            logger.info(f"Transcription length: {len(transcription_text)} characters")
 
-            # For now, create a simple structured format
-            # In a real implementation, this would call Yandex GPT API
-            processed_text = f"""
-ЛЕКЦИЯ: {title}
+            # Get API key - try dedicated key first, fall back to SpeechKit key
+            api_key = os.getenv('YAGPT_API_KEY') or os.getenv('SPEECHKIT_API_KEY')
+            if not api_key:
+                logger.warning("No YAGPT_API_KEY or SPEECHKIT_API_KEY found, using fallback format")
 
-КОНСПЕКТ ЛЕКЦИИ
-================
+            folder_id = os.getenv('FOLDER_ID')
+            logger.info(f"Folder ID: {folder_id}")
+            logger.info(f"API Key prefix: {api_key[:8]}..." if api_key else "No API key")
 
-ВВЕДЕНИЕ
-Данный конспект составлен на основе автоматической расшифровки видеозаписи лекции.
+            # Truncate transcription if too long (API has limits)
+            max_transcription_length = 25000  # Leave room for prompt
+            if len(transcription_text) > max_transcription_length:
+                logger.info(f"Truncating transcription from {len(transcription_text)} to {max_transcription_length}")
+                transcription_text = transcription_text[:max_transcription_length] + "..."
 
-ОСНОВНОЕ СОДЕРЖАНИЕ
+            # Structured prompt for lecture abstract
+            system_prompt = """You are an academic assistant specializing in creating structured lecture abstracts. Your task is to analyze lecture transcriptions and create well-organized summaries in Russian.
+
+Your abstract must include these sections:
+- ВВЕДЕНИЕ (Introduction): Brief overview of what the lecture is about
+- ОСНОВНЫЕ ТЕМЫ (Key Topics): Bullet points listing the main topics covered
+- КЛЮЧЕВЫЕ МОМЕНТЫ (Key Takeaways): 3-5 key insights or conclusions from the lecture
+- ЗАКЛЮЧЕНИЕ (Conclusion): Brief summary
+
+Format your response in Markdown with proper headers."""
+
+            user_prompt = f"""# Лекция: {title}
+
+## Текст расшифровки:
 {transcription_text}
 
-ЗАКЛЮЧЕНИЕ
-Конспект подготовлен автоматически с использованием технологий распознавания речи и обработки естественного языка Яндекса.
+## Задача:
+Создай структурированный конспект этой лекции на русском языке, используя формат Markdown с заголовками."""
 
-ГЕНЕРАЦИЯ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """.strip()
+            logger.info("Sending request to YandexGPT Lite API...")
 
-            return processed_text
+            url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+
+            headers = {
+                'Authorization': f'Api-Key {api_key}',
+                'Content-Type': 'application/json'
+            }
+
+            request_data = {
+                "modelUri": f"gpt://{folder_id}/yandexgpt-lite",
+                "completionOptions": {
+                    "temperature": 0.3,
+                    "maxTokens": "2000",
+                    "stream": False
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "text": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "text": user_prompt
+                    }
+                ]
+            }
+
+            logger.info(f"Request URL: {url}")
+            logger.info(f"Model: gpt://{folder_id}/yandexgpt-lite")
+
+            response = requests.post(url, headers=headers, json=request_data, timeout=60)
+
+            logger.info(f"API Response status: {response.status_code}")
+
+            if response.status_code != 200:
+                logger.error(f"YandexGPT API failed: {response.status_code}")
+                logger.error(f"Response: {response.text[:500]}")
+                raise Exception(f"YandexGPT API failed: {response.status_code} - {response.text[:200]}")
+
+            result = response.json()
+            logger.info("API call successful")
+
+            # Extract the generated text
+            if 'result' in result and 'alternatives' in result['result'] and len(result['result']['alternatives']) > 0:
+                generated_text = result['result']['alternatives'][0]['message']['text']
+                logger.info(f"Generated abstract length: {len(generated_text)} characters")
+
+                # Add header with title and timestamp
+                markdown_abstract = f"""# {title}
+
+*Автоматически созданный конспект лекции*
+
+---
+
+{generated_text}
+
+---
+
+**Создано:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Модель:** YandexGPT Lite
+"""
+
+                logger.info("Abstract generation completed successfully")
+                logger.info("=" * 80)
+                return markdown_abstract
+            else:
+                logger.error(f"Unexpected API response format: {result}")
+                raise Exception("Unexpected API response format from YandexGPT")
 
         except Exception as e:
-            logger.error(f"Failed to process text with GPT: {e}")
-            # Return basic formatting if GPT processing fails
-            return f"""
-ЛЕКЦИЯ: {title}
+            import traceback
+            logger.error("=" * 80)
+            logger.error(f"YandexGPT abstract generation failed: {e}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
+            logger.error("=" * 80)
 
-КОНСПЕКТ ЛЕКЦИИ
-================
+            # Fallback to basic format if GPT fails
+            logger.info("Using fallback format for abstract")
+            return f"""# {title}
 
-{transcription_text}
+*Автоматически созданный конспект лекции*
 
-ГЕНЕРАЦИЯ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """.strip()
+## ВВЕДЕНИЕ
+Данный конспект составлен на основе автоматической расшифровки видеозаписи лекции.
+
+## ОСНОВНОЕ СОДЕРЖАНИЕ
+{transcription_text[:3000]}{'...' if len(transcription_text) > 3000 else ''}
+
+## ЗАКЛЮЧЕНИЕ
+Конспект подготовлен автоматически с использованием технологий распознавания речи Яндекса.
+
+---
+
+**Создано:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Модель:** Fallback (API unavailable)
+"""
 
     def generate_pdf_notes(self, processed_text, title, task_id):
         """Generate PDF from processed lecture notes"""
