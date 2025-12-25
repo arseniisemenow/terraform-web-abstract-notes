@@ -5,268 +5,397 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lecture Notes Generator - Tasks</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
+
+        body {
+            font-family: "Motiva Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+            background: #171a21;
+            min-height: 100vh;
+            padding: 20px;
+            color: #c5c3c0;
+        }
+
         .header {
-            background: white;
+            background: linear-gradient(to right, #2a475e 0%, #1b2838 100%);
             padding: 20px 30px;
-            border-radius: 15px 15px 0 0;
+            border-radius: 4px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
         }
+
         .header h1 {
-            margin: 0;
-            color: #333;
-            font-size: 1.8em;
+            color: #ffffff;
+            font-size: 24px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
         }
+
         .create-btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 12px 24px;
+            background: linear-gradient(to right, #47bfff 0%, #1a9fff 100%);
+            color: #ffffff;
+            padding: 10px 20px;
             text-decoration: none;
-            border-radius: 8px;
-            font-weight: 600;
-            transition: transform 0.2s;
+            border-radius: 2px;
+            font-weight: 500;
+            font-size: 14px;
+            transition: all 0.2s;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
         }
+
         .create-btn:hover {
-            transform: translateY(-2px);
+            background: linear-gradient(to right, #66c0ff 0%, #2a9fff 100%);
+            box-shadow: 0 0 10px rgba(71, 191, 255, 0.4);
         }
+
         .tasks-container {
-            background: white;
-            padding: 30px;
-            border-radius: 0 0 15px 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            background: #1b2838;
+            padding: 20px;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
         }
+
         .tasks-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
             padding-bottom: 15px;
-            border-bottom: 2px solid #f0f0f0;
+            border-bottom: 1px solid #2a475e;
         }
+
         .tasks-title {
-            font-size: 1.5em;
-            font-weight: 600;
-            color: #333;
+            font-size: 18px;
+            font-weight: 500;
+            color: #ffffff;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
+
+        #taskCount {
+            color: #6b768a;
+            font-size: 14px;
+        }
+
         .empty-tasks {
             text-align: center;
-            padding: 40px;
-            color: #666;
+            padding: 60px 40px;
+            color: #6b768a;
             font-style: italic;
         }
+
+        .empty-tasks a {
+            color: #66c0ff;
+            text-decoration: none;
+        }
+
+        .empty-tasks a:hover {
+            text-decoration: underline;
+        }
+
         .task-item {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 15px;
-            transition: all 0.3s ease;
+            background: linear-gradient(to right, #2a475e 0%, #1b2838 100%);
+            border: 1px solid #3d4450;
+            border-radius: 4px;
+            padding: 16px 20px;
+            margin-bottom: 12px;
+            transition: all 0.2s ease;
+            position: relative;
         }
+
+        .task-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(to right, #47bfff 0%, #1a9fff 100%);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
         .task-item:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            border-color: #47bfff;
+            box-shadow: 0 0 15px rgba(71, 191, 255, 0.2);
+            transform: translateX(2px);
         }
+
+        .task-item:hover::before {
+            opacity: 1;
+        }
+
         .task-item.completed {
-            background: #d4edda;
-            border-color: #c3e6cb;
+            border-color: #a4d007;
         }
+
+        .task-item.completed::before {
+            background: linear-gradient(to right, #a4d007 0%, #6b8a00 100%);
+        }
+
+        .task-item.completed:hover {
+            box-shadow: 0 0 15px rgba(164, 208, 7, 0.2);
+        }
+
         .task-item.processing {
-            background: #fff3cd;
-            border-color: #ffeaa7;
+            border-color: #ffd700;
         }
+
+        .task-item.processing::before {
+            background: linear-gradient(to right, #ffd700 0%, #ffaa00 100%);
+        }
+
+        .task-item.processing:hover {
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.2);
+        }
+
         .task-item.failed {
-            background: #f8d7da;
-            border-color: #f5c6cb;
+            border-color: #ff4949;
         }
+
+        .task-item.failed::before {
+            background: linear-gradient(to right, #ff4949 0%, #cc0000 100%);
+        }
+
+        .task-item.failed:hover {
+            box-shadow: 0 0 15px rgba(255, 73, 73, 0.2);
+        }
+
         .task-item-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
             flex-wrap: wrap;
             gap: 10px;
         }
+
         .task-item-title {
-            font-weight: 600;
-            font-size: 1.1em;
-            color: #333;
+            font-weight: 500;
+            font-size: 16px;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
-        .task-item-status {
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.8em;
+
+        .status-badge {
+            padding: 3px 10px;
+            border-radius: 2px;
+            font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
+
         .status-processing {
-            background: #ffc107;
-            color: #856404;
+            background: rgba(255, 215, 0, 0.2);
+            color: #ffd700;
+            border: 1px solid #ffd700;
         }
+
         .status-completed {
-            background: #28a745;
-            color: #fff;
+            background: rgba(164, 208, 7, 0.2);
+            color: #a4d007;
+            border: 1px solid #a4d007;
         }
+
         .status-failed {
-            background: #dc3545;
-            color: #fff;
+            background: rgba(255, 73, 73, 0.2);
+            color: #ff4949;
+            border: 1px solid #ff4949;
         }
+
         .task-item-details {
-            margin: 10px 0;
-            font-size: 0.9em;
-            color: #666;
+            margin: 12px 0;
+            font-size: 13px;
+            color: #8b929a;
         }
+
         .task-item-details a {
-            color: #667eea;
+            color: #66c0ff;
+            text-decoration: none;
             word-break: break-all;
         }
-        .progress-container {
-            margin: 10px 0;
+
+        .task-item-details a:hover {
+            text-decoration: underline;
         }
+
+        .progress-container {
+            margin: 12px 0;
+        }
+
         .progress-bar-container {
             width: 100%;
-            height: 8px;
-            background: #e9ecef;
-            border-radius: 4px;
+            height: 6px;
+            background: #171a21;
+            border-radius: 3px;
             overflow: hidden;
         }
+
         .progress-bar {
             height: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(to right, #47bfff 0%, #1a9fff 100%);
             transition: width 0.3s ease;
-            border-radius: 4px;
+            border-radius: 3px;
         }
+
         .progress-text {
             text-align: center;
-            margin-top: 5px;
-            font-size: 0.8em;
-            color: #666;
+            margin-top: 6px;
+            font-size: 12px;
+            color: #8b929a;
         }
+
+        .error-message {
+            background: rgba(255, 73, 73, 0.1);
+            color: #ff4949;
+            padding: 10px 15px;
+            border-radius: 2px;
+            margin-top: 10px;
+            font-size: 13px;
+            border-left: 3px solid #ff4949;
+        }
+
         .downloads-container {
             margin-top: 15px;
             padding: 15px;
-            background: rgba(255,255,255,0.7);
-            border-radius: 8px;
+            background: rgba(42, 71, 94, 0.3);
+            border-radius: 2px;
+            border: 1px solid #3d4450;
         }
+
         .downloads-title {
-            font-weight: 600;
-            color: #333;
+            font-weight: 500;
+            color: #ffffff;
             margin-bottom: 10px;
-            font-size: 0.9em;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
+
         .btn {
             display: inline-block;
             padding: 8px 16px;
-            margin-right: 10px;
-            margin-bottom: 8px;
+            margin-right: 8px;
+            margin-bottom: 6px;
             text-decoration: none;
-            border-radius: 5px;
-            font-size: 0.85em;
+            border-radius: 2px;
+            font-size: 13px;
             font-weight: 500;
-            transition: all 0.3s;
+            transition: all 0.2s;
             cursor: pointer;
             border: none;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
+
         .btn:hover {
             transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
-        .btn-primary {
-            background: #007bff;
-            color: white;
-        }
-        .btn-primary:hover {
-            background: #0056b3;
-            color: white;
-        }
+
         .btn-success {
-            background: #28a745;
-            color: white;
+            background: linear-gradient(to right, #a4d007 0%, #6b8a00 100%);
+            color: #ffffff;
         }
+
         .btn-success:hover {
-            background: #1e7e34;
-            color: white;
+            background: linear-gradient(to right, #b8e025 0%, #7da025 100%);
         }
-        .btn-info {
-            background: #17a2b8;
-            color: white;
-        }
-        .btn-info:hover {
-            background: #117a8b;
-            color: white;
-        }
-        .btn-purple {
-            background: linear-gradient(135deg, #9b59b6, #8e44ad);
-            color: white;
-        }
-        .btn-purple:hover {
-            background: linear-gradient(135deg, #8e44ad, #7d3c98);
-            color: white;
-        }
+
         .btn-danger {
-            background: #dc3545;
-            color: white;
+            background: linear-gradient(to right, #ff4949 0%, #cc0000 100%);
+            color: #ffffff;
         }
+
         .btn-danger:hover {
-            background: #c82333;
-            color: white;
+            background: linear-gradient(to right, #ff6666 0%, #e60000 100%);
         }
+
+        .btn-gray {
+            background: linear-gradient(to right, #3d4450 0%, #2a2f3a 100%);
+            color: #c5c3c0;
+        }
+
+        .btn-gray:hover {
+            background: linear-gradient(to right, #4d5460 0%, #3a3f4a 100%);
+        }
+
         .btn:disabled {
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
             transform: none;
         }
-        .error-message {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 10px;
-            border-radius: 5px;
-            margin-top: 10px;
-            font-size: 0.9em;
-        }
+
         .task-meta {
-            font-size: 0.75em;
-            color: #999;
+            font-size: 11px;
+            color: #5c6370;
             margin-top: 10px;
+            font-family: monospace;
         }
+
+        .delete-confirm {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .delete-confirm span {
+            font-size: 13px;
+        }
+
         .notification {
             position: fixed;
             top: 20px;
             right: 20px;
-            padding: 15px 20px;
-            border-radius: 8px;
-            color: white;
+            padding: 15px 25px;
+            border-radius: 2px;
+            color: #ffffff;
             font-weight: 500;
+            font-size: 14px;
             opacity: 0;
             transform: translateY(-20px);
             transition: all 0.3s ease;
             z-index: 1000;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
+
         .notification.show {
             opacity: 1;
             transform: translateY(0);
         }
+
         .notification.error {
-            background: #dc3545;
+            background: linear-gradient(to right, #ff4949 0%, #cc0000 100%);
         }
+
         .notification.success {
-            background: #28a745;
+            background: linear-gradient(to right, #a4d007 0%, #6b8a00 100%);
         }
-        .status-badge-small {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 0.7em;
-            font-weight: 600;
-            margin-left: 10px;
-            vertical-align: middle;
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #171a21;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #3d4450;
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4d5560;
         }
     </style>
 </head>
@@ -340,7 +469,7 @@
 
             // Error message for failed tasks
             if (task.status === 'failed' && task.status_message) {
-                errorHTML = `<div class="error-message">Error: ${task.status_message}</div>`;
+                errorHTML = `<div class="error-message">${task.status_message}</div>`;
             }
 
             // Downloads section for completed tasks
@@ -350,7 +479,7 @@
                 // MP3 download button
                 if (task.mp3_url) {
                     downloadButtons.push(`
-                        <a href="/api/mp3?task_id=${taskId}" class="btn btn-info" download>
+                        <a href="/api/mp3?task_id=${taskId}" class="btn btn-success" download>
                             Audio (MP3)
                         </a>
                     `);
@@ -359,8 +488,8 @@
                 // Transcription download button
                 if (task.transcription) {
                     downloadButtons.push(`
-                        <a href="/api/transcription?task_id=${taskId}" class="btn btn-primary" download>
-                            Transcription (TXT)
+                        <a href="/api/transcription?task_id=${taskId}" class="btn btn-success" download>
+                            Transcription
                         </a>
                     `);
                 }
@@ -368,8 +497,8 @@
                 // Abstract/Brief download button
                 if (task.abstract_url) {
                     downloadButtons.push(`
-                        <a href="/api/abstract?task_id=${taskId}" class="btn btn-purple" download>
-                            Brief (MD)
+                        <a href="/api/abstract?task_id=${taskId}" class="btn btn-success" download>
+                            Brief
                         </a>
                     `);
                 }
@@ -378,7 +507,7 @@
                 if (task.pdf_url) {
                     downloadButtons.push(`
                         <a href="/api/pdf?task_id=${taskId}" class="btn btn-success" download>
-                            Notes (PDF)
+                            PDF
                         </a>
                     `);
                 }
@@ -386,7 +515,7 @@
                 if (downloadButtons.length > 0) {
                     downloadsHTML = `
                         <div class="downloads-container">
-                            <div class="downloads-title">Available Downloads:</div>
+                            <div class="downloads-title">Downloads</div>
                             ${downloadButtons.join('')}
                         </div>
                     `;
@@ -405,12 +534,12 @@
                     <div class="task-item-header">
                         <div class="task-item-title">
                             ${task.title || 'Untitled'}
-                            <span class="status-badge-small ${statusClass}">${statusText}</span>
+                            <span class="status-badge ${statusClass}">${statusText}</span>
                         </div>
                         ${deleteButton}
                     </div>
                     <div class="task-item-details">
-                        <div><strong>Video URL:</strong> <a href="${task.video_url}" target="_blank">${task.video_url}</a></div>
+                        <div><strong>Video:</strong> <a href="${task.video_url}" target="_blank">${task.video_url}</a></div>
                         ${task.description ? `<div><strong>Description:</strong> ${task.description}</div>` : ''}
                     </div>
                     ${progressHTML}
@@ -494,10 +623,10 @@
             // Show confirmation UI
             const taskElement = document.getElementById(`task-${taskId}`);
             const confirmHTML = `
-                <div class="delete-confirm" style="margin-top: 10px;">
-                    <span style="color: #dc3545;">Are you sure? </span>
-                    <button class="btn btn-danger" onclick="confirmDelete('${taskId}')" style="padding: 4px 10px; font-size: 0.8em;">Yes, Delete</button>
-                    <button class="btn btn-primary" onclick="cancelDelete('${taskId}')" style="padding: 4px 10px; font-size: 0.8em; background: #6c757d;">Cancel</button>
+                <div class="delete-confirm">
+                    <span style="color: #ff4949;">Delete this task? </span>
+                    <button class="btn btn-danger" onclick="confirmDelete('${taskId}')" style="padding: 4px 10px; font-size: 11px;">Yes</button>
+                    <button class="btn btn-gray" onclick="cancelDelete('${taskId}')" style="padding: 4px 10px; font-size: 11px;">Cancel</button>
                 </div>
             `;
             const deleteBtn = taskElement.querySelector('.btn-danger');
@@ -518,15 +647,15 @@
                 if (response.ok) {
                     delete tasksData[taskId];
                     updateTasksDisplay();
-                    showNotification('Task deleted successfully', 'success');
+                    showNotification('Task deleted', 'success');
                 } else {
                     const error = await response.json();
-                    showNotification(error.error || 'Failed to delete task', 'error');
+                    showNotification(error.error || 'Failed to delete', 'error');
                     cancelDelete(taskId);
                 }
             } catch (error) {
                 console.error('Error deleting task:', error);
-                showNotification('Network error. Please try again.', 'error');
+                showNotification('Network error', 'error');
                 cancelDelete(taskId);
             }
         }
