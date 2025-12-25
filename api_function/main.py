@@ -3,11 +3,12 @@ import json
 import uuid
 import boto3
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import logging
 from pathlib import Path
 from urllib.parse import quote
 import re
+import html
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -63,10 +64,67 @@ def get_tasks_from_storage():
                     except Exception as e:
                         logger.error(f"Error reading task {obj['Key']}: {e}")
 
+        # Trigger cleanup occasionally (random chance to avoid overhead)
+        import random
+        if random.random() < 0.1:  # 10% chance
+            try:
+                cleanup_old_files()
+            except Exception as e:
+                logger.error(f"Cleanup failed: {e}")
+
         return tasks
     except Exception as e:
         logger.error(f"Error fetching tasks: {e}")
         return {}
+
+
+def cleanup_old_files():
+    """Clean up old files and tasks from storage (runs occasionally)"""
+    try:
+        # Everything expires after 1 hour
+        cutoff_hours = 1
+        # Use timezone-aware datetime to match S3's LastModified format
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=cutoff_hours)
+
+        total_deleted = 0
+
+        # All prefixes to clean up (including task metadata)
+        all_prefixes = ['audio/', 'mp3/', 'abstracts/', 'transcriptions/', 'notes/', 'tasks/']
+
+        for prefix in all_prefixes:
+            try:
+                paginator = s3_client.get_paginator('list_objects_v2')
+                page_iterator = paginator.paginate(Bucket=BUCKET_NAME, Prefix=prefix)
+
+                for page in page_iterator:
+                    if 'Contents' not in page:
+                        continue
+
+                    objects_to_delete = [
+                        {'Key': obj['Key']}
+                        for obj in page['Contents']
+                        if obj['LastModified'] < cutoff_time
+                    ]
+
+                    if objects_to_delete:
+                        s3_client.delete_objects(
+                            Bucket=BUCKET_NAME,
+                            Delete={'Objects': objects_to_delete}
+                        )
+                        total_deleted += len(objects_to_delete)
+                        logger.info(f"Cleanup: deleted {len(objects_to_delete)} from {prefix}")
+
+            except Exception as e:
+                logger.error(f"Error cleaning {prefix}: {e}")
+
+        if total_deleted > 0:
+            logger.info(f"Cleanup complete: {total_deleted} items deleted (older than {cutoff_hours}h)")
+
+        return total_deleted
+
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+        return 0
 
 
 def save_task_to_storage(task_id, task_data):
@@ -449,6 +507,8 @@ def handle_download_mp3(task_id):
 
 def handle_download_pdf(task_id):
     """Handle PDF download"""
+    import base64
+
     try:
         tasks = get_tasks_from_storage()
 
@@ -457,17 +517,137 @@ def handle_download_pdf(task_id):
 
         task = tasks[task_id]
 
-        if not task.get('pdf_url'):
+        # Check if abstract_url exists - use it to generate PDF on-the-fly from abstract
+        abstract_url = task.get('abstract_url')
+        if not abstract_url:
             return json_response({
                 'error': 'PDF not available for this task',
                 'task_id': task_id,
                 'task_status': task.get('status', 'unknown')
             }, 404)
 
-        return redirect_response(task.get('pdf_url'))
+        # Fetch abstract content from S3
+        # URL format: https://storage.yandexcloud.net/{bucket}/{key}
+        if abstract_url.startswith('https://storage.yandexcloud.net/'):
+            key = abstract_url.split('/', 4)[-1]
+            obj_response = s3_client.get_object(Bucket=BUCKET_NAME, Key=key)
+            abstract_content = obj_response['Body'].read().decode('utf-8')
+        else:
+            return json_response({'error': 'Invalid abstract URL'}, 400)
+
+        # Generate PDF on-the-fly from abstract
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter, A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+        from reportlab.lib.units import inch
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from io import BytesIO
+
+        # Create PDF in memory
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
+
+        # Add custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Title'],
+            fontSize=18,
+            textColor='#000000',
+            spaceAfter=20,
+            alignment=TA_CENTER
+        )
+
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading1'],
+            fontSize=14,
+            textColor='#000000',
+            spaceAfter=10,
+            spaceBefore=15
+        )
+
+        normal_style = ParagraphStyle(
+            'CustomNormal',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor='#000000',
+            spaceAfter=8,
+            leading=14
+        )
+
+        # Sanitize title for PDF (escape XML special chars)
+        title = html.escape(task.get('title', 'Lecture Notes'))
+        story.append(Paragraph(title, title_style))
+        story.append(Spacer(1, 0.2*inch))
+
+        # Add timestamp
+        created_at = task.get('created_at', '')
+        if created_at:
+            story.append(Paragraph(f"<i>Created: {html.escape(created_at[:19])}</i>", normal_style))
+        story.append(Spacer(1, 0.3*inch))
+
+        # Process markdown-like content
+        lines = abstract_content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:
+                story.append(Spacer(1, 0.1*inch))
+                continue
+
+            # Handle headers (# ## ###)
+            if line.startswith('#'):
+                level = len(line) - len(line.lstrip('#'))
+                text = html.escape(line.lstrip('#').strip())
+                if level == 1:
+                    story.append(Paragraph(text, heading_style))
+                else:
+                    story.append(Paragraph(text, normal_style))
+            # Handle bullet points
+            elif line.startswith('-') or line.startswith('*'):
+                text = '• ' + html.escape(line.lstrip('-*').strip())
+                story.append(Paragraph(text, normal_style))
+            # Handle numbered lists
+            elif len(line) > 1 and line[0].isdigit() and line[1] == '.':
+                story.append(Paragraph(html.escape(line), normal_style))
+            # Regular text - escape special characters
+            else:
+                story.append(Paragraph(html.escape(line), normal_style))
+
+        # Build PDF
+        doc.build(story)
+
+        # Get PDF content and encode as base64 for Yandex Cloud Functions
+        pdf_content = buffer.getvalue()
+        buffer.close()
+
+        # Create filename from lecture title (sanitize for filename)
+        lecture_title = task.get('title', 'Lecture Notes')
+        # Remove/replace characters that are invalid in filenames
+        safe_filename = re.sub(r'[<>:"/\\|?*]', '_', lecture_title)
+        safe_filename = safe_filename[:100]  # Limit length
+        safe_filename = safe_filename.strip()
+
+        # Return PDF content with base64 encoding (required for binary responses in Yandex Cloud)
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/pdf',
+                'Content-Disposition': f'attachment; filename="{safe_filename}.pdf"',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': base64.b64encode(pdf_content).decode('utf-8'),
+            'isBase64Encoded': True
+        }
 
     except Exception as e:
         logger.error(f"Error in handle_download_pdf: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return json_response({'error': str(e)}, 500)
 
 
@@ -605,7 +785,7 @@ def handle_api_gateway_request(event):
 # ============================================================================
 
 if __name__ == '__main__':
-    from flask import Flask
+    from flask import Flask, request
     app = Flask(__name__)
 
     @app.route('/')
@@ -653,8 +833,18 @@ if __name__ == '__main__':
 
     @app.route('/api/pdf')
     def api_pdf():
+        import base64
         task_id = request.args.get('task_id')
         result = handle_download_pdf(task_id)
+        if result['statusCode'] == 200 and result.get('isBase64Encoded'):
+            # Decode base64 and return as binary response
+            from flask import Response
+            pdf_data = base64.b64decode(result['body'])
+            return Response(
+                pdf_data,
+                status=200,
+                headers=result['headers']
+            )
         return result['body'], result['statusCode']
 
     @app.route('/api/abstract')
