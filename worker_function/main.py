@@ -346,68 +346,166 @@ class LectureNotesWorker:
             raise Exception(f"MP3 conversion failed: {e}")
 
     def transcribe_audio_speechkit(self, audio_path, task_id):
-        """Transcribe audio using Yandex SpeechKit - REAL TRANSCRIPTION ONLY"""
+        """Transcribe audio using Yandex SpeechKit v2 Async API (full audio)"""
         try:
-            logger.info("Starting transcription with SpeechKit")
+            logger.info("=" * 80)
+            logger.info("Starting transcription with SpeechKit v2 Async API")
+            logger.info(f"Task ID: {task_id}")
+            logger.info(f"Audio path: {audio_path}")
 
-            # Get IAM token using the enhanced method
-            iam_token = self.get_iam_token()
+            # Use API Key for authentication (static, no need for dynamic token creation)
+            api_key = os.getenv('SPEECHKIT_API_KEY')
+            logger.info(f"SPEECHKIT_API_KEY env var exists: {api_key is not None}")
+            logger.info(f"SPEECHKIT_API_KEY length: {len(api_key) if api_key else 0}")
+            logger.info(f"SPEECHKIT_API_KEY prefix: {api_key[:10]}..." if api_key else "NO API KEY")
 
-            if not iam_token:
-                logger.error("FAILED: No IAM token available for SpeechKit")
-                raise Exception("SpeechKit authentication failed - no IAM token available")
+            if not api_key:
+                raise Exception("SPEECHKIT_API_KEY environment variable not set")
 
-            logger.info(f"Got IAM token, length: {len(iam_token)}")
+            # Step 1: Upload audio file to Yandex Object Storage
+            logger.info("-" * 40)
+            logger.info("Step 1: Uploading audio to Yandex Storage for SpeechKit")
+            audio_storage_key = f"audio/{task_id}.mp3"
+            logger.info(f"Audio storage key: {audio_storage_key}")
+            logger.info(f"Storage bucket: {self.storage_bucket}")
 
-            # Read audio file
-            with open(audio_path, 'rb') as f:
-                audio_data = f.read()
+            audio_public_url = self.upload_to_storage(audio_path, audio_storage_key)
+            logger.info(f"Public URL: {audio_public_url}")
 
-            logger.info(f"Audio file size: {len(audio_data)} bytes")
+            if not audio_public_url:
+                raise Exception("Failed to upload audio to storage for SpeechKit")
 
-            # SpeechKit API endpoint
-            url = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
+            # Step 2: Generate presigned URL for the audio file
+            logger.info("-" * 40)
+            logger.info("Step 2: Generating presigned URL")
+            from botocore.client import Config
 
-            headers = {
-                'Authorization': f'Bearer {iam_token}',
-                'Content-Type': 'audio/x-wav'
-            }
-
-            params = {
-                'folderId': self.speechkit_folder_id,
-                'lang': 'auto',  # Auto-detect language
-                'format': 'lpcm',
-                'sampleRateHertz': 16000
-            }
-
-            logger.info(f"SpeechKit API call - URL: {url}, Folder: {self.speechkit_folder_id}")
-
-            logger.info(f"Sending {len(audio_data)} bytes to SpeechKit")
-
-            response = requests.post(
-                url,
-                headers=headers,
-                params=params,
-                data=audio_data,
-                timeout=600
+            s3_client = boto3.client(
+                's3',
+                endpoint_url='https://storage.yandexcloud.net',
+                aws_access_key_id=self.storage_access_key,
+                aws_secret_access_key=self.storage_secret_key,
+                config=Config(signature_version='s3v4'),
+                region_name='ru-central1'
             )
 
-            if response.status_code == 200:
-                result = response.json()
-                if 'result' in result:
-                    transcription = result['result']
+            presigned_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': self.storage_bucket, 'Key': audio_storage_key},
+                ExpiresIn=3600
+            )
+
+            logger.info(f"Presigned URL generated (length: {len(presigned_url)})")
+            logger.info(f"Presigned URL (first 150 chars): {presigned_url[:150]}")
+
+            # Step 3: Start asynchronous transcription using v2 API
+            logger.info("-" * 40)
+            logger.info("Step 3: Calling SpeechKit Async API v2")
+
+            url = "https://transcribe.api.cloud.yandex.net/speech/stt/v2/longRunningRecognize"
+            logger.info(f"Full API URL: {url}")
+
+            headers = {
+                'Authorization': f'Api-Key {api_key}',
+                'Content-Type': 'application/json'
+            }
+            logger.info(f"Request headers: Authorization=Api-Key {api_key[:8]}..., Content-Type=application/json")
+
+            # Build the request for async transcription (API v2 format)
+            request_data = {
+                "config": {
+                    "specification": {
+                        "languageCode": "ru-RU",
+                        "audioEncoding": "MP3"
+                    }
+                },
+                "audio": {
+                    "uri": presigned_url
+                }
+            }
+            logger.info(f"Request body: {json.dumps(request_data, indent=2)}")
+
+            logger.info("Sending POST request to SpeechKit API...")
+            response = requests.post(url, headers=headers, json=request_data, timeout=30)
+
+            logger.info("-" * 40)
+            logger.info(f"API Response Status Code: {response.status_code}")
+            logger.info(f"API Response Headers: {dict(response.headers)}")
+            logger.info(f"API Response Body: {response.text}")
+
+            if response.status_code != 200:
+                logger.error(f"SpeechKit API request FAILED!")
+                logger.error(f"Status: {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                raise Exception(f"SpeechKit API failed: {response.status_code} - {response.text}")
+
+            operation_id = response.json().get('id')
+            if not operation_id:
+                raise Exception(f"No operation ID in response: {response.text[:200]}")
+
+            logger.info(f"Transcription operation started: {operation_id}")
+
+            # Step 4: Poll for operation completion
+            operation_url = f"https://operation.api.cloud.yandex.net/operations/{operation_id}"
+            max_attempts = 360  # 30 minutes timeout (360 * 5 seconds)
+
+            for attempt in range(max_attempts):
+                if attempt % 10 == 0:  # Log every 30 seconds
+                    logger.info(f"Checking transcription status... (attempt {attempt + 1}/{max_attempts})")
+
+                op_response = requests.get(operation_url, headers={'Authorization': f'Api-Key {api_key}'}, timeout=10)
+
+                if op_response.status_code != 200:
+                    logger.error(f"Failed to check operation status: {op_response.status_code}")
+                    time.sleep(5)
+                    continue
+
+                operation_data = op_response.json()
+                done = operation_data.get('done', False)
+
+                if done:
+                    # Operation complete - check for errors
+                    if 'error' in operation_data:
+                        error_code = operation_data['error'].get('code')
+                        error_message = operation_data['error'].get('message')
+                        logger.error(f"Transcription operation failed: {error_code} - {error_message}")
+                        raise Exception(f"SpeechKit transcription failed: {error_message}")
+
+                    # Get transcription result
+                    response_data = operation_data.get('response', {})
+                    chunks = response_data.get('chunks', [])
+
+                    if not chunks:
+                        logger.warning("No transcription chunks in response")
+                        return ""
+
+                    # Combine all chunks
+                    transcription_parts = []
+                    for chunk in chunks:
+                        alternatives = chunk.get('alternatives', [])
+                        if alternatives:
+                            text = alternatives[0].get('text', '')
+                            if text:
+                                transcription_parts.append(text)
+
+                    transcription = ' '.join(transcription_parts)
                     logger.info(f"SUCCESS: Transcription completed: {len(transcription)} characters")
-                    logger.info(f"Transcription preview: {transcription[:100]}...")
+                    logger.info(f"Transcription preview: {transcription[:200]}...")
                     return transcription
-                else:
-                    logger.error(f"FAILED: No result in SpeechKit response: {result}")
-                    raise Exception(f"SpeechKit API returned invalid response: {result}")
-            else:
-                logger.error(f"FAILED: SpeechKit API error: {response.status_code} - {response.text}")
-                raise Exception(f"SpeechKit API failed with status {response.status_code}: {response.text}")
+
+                # Wait before next poll
+                time.sleep(5)
+
+            raise Exception("Transcription timeout - operation took too long")
 
         except Exception as e:
-            logger.error(f"FAILED: SpeechKit transcription failed: {e}")
+            import traceback
+            logger.error("=" * 80)
+            logger.error(f"FAILED: SpeechKit transcription failed!")
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception message: {e}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
+            logger.error("=" * 80)
             raise Exception(f"SpeechKit transcription error: {e}")
 
     def generate_service_account_token(self):
@@ -563,14 +661,34 @@ class LectureNotesWorker:
                 self.update_task_status(task_id, 'failed', 0, "Failed to upload MP3")
                 return False
 
-            # Step 4: Update task as completed
+            # Step 4: Transcribe audio using SpeechKit
+            self.update_task_status(task_id, 'processing', 85, "Transcribing audio...")
+            logger.info("Starting SpeechKit transcription...")
+
+            transcription = None
+            try:
+                transcription = self.transcribe_audio_speechkit(mp3_path, task_id)
+                logger.info(f"Transcription completed: {len(transcription)} characters")
+            except Exception as e:
+                logger.error(f"Transcription failed: {e}")
+                # Mark task as completed but note transcription error in status message
+                self.update_task_status(task_id, 'processing', 90, f"MP3 ready (transcription failed: {str(e)[:100]})")
+
+            # Step 5: Update task as completed
             task_result = {
                 'mp3_url': mp3_url,
                 'processed_at': datetime.now().isoformat(),
                 'video_duration': self.get_video_duration(video_path)
             }
 
-            self.update_task_status(task_id, 'completed', 100, "MP3 conversion completed", task_result)
+            # Add transcription if successful
+            if transcription:
+                task_result['transcription'] = transcription
+                status_message = "Processing completed - MP3 and transcription ready"
+            else:
+                status_message = "Processing completed - MP3 ready (transcription unavailable)"
+
+            self.update_task_status(task_id, 'completed', 100, status_message, task_result)
 
             logger.info(f"Task {task_id} completed successfully - MP3 available at: {mp3_url}")
             return True

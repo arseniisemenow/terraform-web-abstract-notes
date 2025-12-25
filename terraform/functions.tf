@@ -82,6 +82,8 @@ resource "yandex_function" "worker" {
     QUEUE_URL = yandex_message_queue.main.id
     SA_KEY_ID = yandex_iam_service_account_static_access_key.main.access_key
     SERVICE_ACCOUNT_ID = yandex_iam_service_account.main.id
+    YC_TOKEN = var.yc_token
+    SPEECHKIT_API_KEY = yandex_iam_service_account_api_key.speechkit.secret_key
   }
 
   content {

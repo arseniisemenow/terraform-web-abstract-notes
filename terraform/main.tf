@@ -47,6 +47,13 @@ resource "yandex_resourcemanager_folder_iam_member" "sa_speechkit" {
   member    = "serviceAccount:${yandex_iam_service_account.main.id}"
 }
 
+# Required for async SpeechKit - access to read audio from storage
+resource "yandex_resourcemanager_folder_iam_member" "sa_storage_uploader" {
+  folder_id = var.folder_id
+  role      = "storage.uploader"
+  member    = "serviceAccount:${yandex_iam_service_account.main.id}"
+}
+
 resource "yandex_resourcemanager_folder_iam_member" "sa_gpt" {
   folder_id = var.folder_id
   role      = "ai.languageModels.user"
@@ -113,6 +120,13 @@ resource "yandex_storage_bucket" "main" {
 
 resource "yandex_iam_service_account_static_access_key" "main" {
   service_account_id = yandex_iam_service_account.main.id
+}
+
+# API Key for SpeechKit service account (required for async API)
+resource "yandex_iam_service_account_api_key" "speechkit" {
+  service_account_id = yandex_iam_service_account.main.id
+  description          = "API key for SpeechKit async API"
+  expires_at          = "2025-12-31T23:59:59Z"  # Set expiration, can be extended
 }
 
 # YDB Database
